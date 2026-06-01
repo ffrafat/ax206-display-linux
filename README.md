@@ -12,6 +12,13 @@ real hardware. Pure-Python, works on Apple Silicon.
 
 Panel: **480×320 landscape, RGB565, USB 1.1** (~1.4 full-screen fps).
 
+<p align="center">
+  <img src="docs/dashboard-2x.png" width="480"
+       alt="Live system dashboard on the 480x320 screen: clock, CPU and RAM ring gauges, network up/down, CPU history sparkline">
+  <br>
+  <em>dashboard.py output (rendered frame — pixel-identical to what the panel shows)</em>
+</p>
+
 ## Files
 - `ax206.py` — the driver (`AX206Display`: `open`, `blit`, `fill`, `draw_image`, `recover`, `reopen`)
 - `show_image.py` — CLI to show an image / solid color / test pattern
