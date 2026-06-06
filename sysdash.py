@@ -62,12 +62,12 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-# Pre-load scaled fonts (Enlarged for readability)
-F_CLOCK = _font(38 * SS, bold=True)
-F_BIG   = _font(36 * SS, bold=True)
-F_MED   = _font(20 * SS, bold=True)
-F_SMALL = _font(14 * SS, bold=True)
-F_TINY  = _font(12 * SS)
+# Pre-load scaled fonts (optimized for 480x320)
+F_CLOCK = _font(34 * SS, bold=True)
+F_BIG   = _font(30 * SS, bold=True)
+F_MED   = _font(16 * SS, bold=True)
+F_SMALL = _font(13 * SS, bold=True)
+F_TINY  = _font(11 * SS)
 
 
 # ---- Helper Functions ----
@@ -143,12 +143,12 @@ def ring(d: ImageDraw.ImageDraw, cx: float, cy: float, r: float, width: float, p
     if pct > 0:
         end = -90 + 360 * min(1.0, pct / 100)
         d.arc(box, -90, end, fill=color, width=width)
-    # Text inside
+    # Text inside circle
     text_centered(d, cx, cy, value_text, F_BIG, INK)
     # Label and subtext below circle
-    text_centered(d, cx, cy + r + 30 * SS, label, F_MED, DIM)
+    text_centered(d, cx, cy + r + 16 * SS, label, F_MED, DIM)
     if sub_text:
-        text_centered(d, cx, cy + r + 70 * SS, sub_text, F_SMALL, DIM)
+        text_centered(d, cx, cy + r + 34 * SS, sub_text, F_SMALL, DIM)
 
 
 # ---- Renderer ----
@@ -164,61 +164,59 @@ def render(state: dict) -> Image.Image:
     date_str = time.strftime("%a %d %b")
 
     # Host & OS Info (Left)
-    d.text((20 * SS, 16 * SS), hostname.upper(), font=F_MED, fill=CYAN)
-    d.text((20 * SS, 56 * SS), os_info, font=F_TINY, fill=DIM)
+    d.text((20 * SS, 10 * SS), hostname.upper(), font=F_MED, fill=CYAN)
+    d.text((20 * SS, 30 * SS), os_info, font=F_TINY, fill=DIM)
 
     # Clock & Date (Right)
-    d.text((W * SS - 20 * SS, 10 * SS), clock, font=F_CLOCK, fill=INK, anchor="ra")
-    d.text((W * SS - 20 * SS, 60 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
+    d.text((W * SS - 20 * SS, 8 * SS), clock, font=F_CLOCK, fill=INK, anchor="ra")
+    d.text((W * SS - 20 * SS, 32 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
 
     # Separator Line
-    d.line([(20 * SS, 90 * SS), ((W - 20) * SS, 90 * SS)], fill=TRACK, width=2 * SS)
+    d.line([(20 * SS, 45 * SS), ((W - 20) * SS, 45 * SS)], fill=TRACK, width=2 * SS)
 
     # ---- 2. Middle Large Circular Gauges ----
-    cy = 260 * SS
-    r = 80 * SS  # Large 160px diameter
-    w = 12 * SS  # Bold track
+    cy = 120 * SS
+    r = 52 * SS  # Optimised 104px radius (fits beautifully)
+    w = 10 * SS  # Bold track
 
     # CPU Ring (Left)
     cpu_pct = state["cpu"]
-    temp_color = RED if (state["temp"] and state["temp"] > 70) else CYAN
     temp_str = f"{state['temp']:.1f}°C" if state["temp"] else "--°C"
-    ring(d, 180 * SS, cy, r, w, cpu_pct, cpu_color(cpu_pct), "CPU", f"{cpu_pct:.0f}%", temp_str)
+    ring(d, 110 * SS, cy, r, w, cpu_pct, cpu_color(cpu_pct), "CPU", f"{cpu_pct:.0f}%", temp_str)
 
     # RAM Ring (Right)
     ram_pct = state["ram"]
     ram_str = f"{state['ram_used']:.1f} / {state['ram_total']:.0f} GB"
-    ring(d, 780 * SS, cy, r, w, ram_pct, PURPLE, "RAM", f"{ram_pct:.0f}%", ram_str)
+    ring(d, 370 * SS, cy, r, w, ram_pct, PURPLE, "RAM", f"{ram_pct:.0f}%", ram_str)
 
     # ---- 3. Center Stats Column ----
-    cx = 480 * SS
-    text_centered(d, cx, cy - 70 * SS, "SYSTEM", F_TINY, DIM)
-    text_centered(d, cx, cy - 30 * SS, f"↓ {fmt_rate(state['rx'])}", F_MED, GREEN)
-    text_centered(d, cx, cy + 15 * SS, f"↑ {fmt_rate(state['tx'])}", F_MED, ORANGE)
+    cx = 240 * SS
+    text_centered(d, cx, cy - 40 * SS, "SYSTEM", F_TINY, DIM)
+    text_centered(d, cx, cy - 15 * SS, f"↓ {fmt_rate(state['rx'])}", F_MED, GREEN)
+    text_centered(d, cx, cy + 10 * SS, f"↑ {fmt_rate(state['tx'])}", F_MED, ORANGE)
     
     # Load averages (displaying 1 min load dynamically in large text)
     load_val = state["load"][0]
-    text_centered(d, cx, cy + 60 * SS, f"load: {load_val:.2f}", F_TINY, DIM)
+    text_centered(d, cx, cy + 32 * SS, f"load: {load_val:.2f}", F_TINY, DIM)
 
     # ---- 4. Bottom Horizontal Disk Bar ----
-    bx0, by0, bx1, by1 = 32 * SS, 512 * SS, 928 * SS, 560 * SS
+    by0, by1 = 245 * SS, 265 * SS
     disk_pct = state["disk"]
     
     # Labels above disk progress bar
-    d.text((bx0, by0 - 36 * SS), "STORAGE", font=F_TINY, fill=DIM)
-    d.text((bx1, by0 - 36 * SS), f"{state['disk_used']:.0f} / {state['disk_total']:.0f} GB ({disk_pct:.0f}%)", font=F_TINY, fill=DIM, anchor="ra")
+    d.text((20 * SS, by0 - 16 * SS), "STORAGE", font=F_TINY, fill=DIM)
+    d.text((W * SS - 20 * SS, by0 - 16 * SS), f"{state['disk_used']:.0f} / {state['disk_total']:.0f} GB ({disk_pct:.0f}%)", font=F_TINY, fill=DIM, anchor="ra")
 
     # Progress bar container
-    d.rounded_rectangle([bx0, by0, bx1, by1], radius=8 * SS, fill=PANEL)
+    d.rounded_rectangle([20 * SS, by0, (W - 20) * SS, by1], radius=6 * SS, fill=PANEL)
     
     # Progress bar fill
     if disk_pct > 0:
-        fill_w = (bx1 - bx0) * min(1.0, disk_pct / 100)
-        # Ensure we draw a valid rounded rect if width > 2 * radius
-        if fill_w > 16 * SS:
-            d.rounded_rectangle([bx0, by0, bx0 + fill_w, by1], radius=8 * SS, fill=GREEN)
+        fill_w = ((W - 40) * SS) * min(1.0, disk_pct / 100)
+        if fill_w > 12 * SS:
+            d.rounded_rectangle([20 * SS, by0, 20 * SS + fill_w, by1], radius=6 * SS, fill=GREEN)
         else:
-            d.rectangle([bx0, by0, bx0 + fill_w, by1], fill=GREEN)
+            d.rectangle([20 * SS, by0, 20 * SS + fill_w, by1], fill=GREEN)
 
     # Downsample using Lanczos for clean antialiasing
     return img.resize((W, H), Image.Resampling.LANCZOS)
