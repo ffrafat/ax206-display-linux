@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Linux-focused system-monitor dashboard for the AX206 SmartCool USB screen.
+"""Linux-focused system-monitor dashboard in AIDA64 style for the AX206 SmartCool USB screen.
 
-Renders a 480x320 highly readable dashboard with:
-  - Header: Hostname, OS distro info, clock, and date.
-  - Two Large Ring Gauges: CPU (%) and RAM (%).
-  - Center Column: Live Network speeds, system load average, and CPU temperature.
-  - Bottom Row: Wide horizontal progress bar for Disk usage.
+Renders a 480x320 black dashboard matching the user's design:
+  - Header: Procedural gears logo, system load, and thin clock.
+  - Two Main Panels: CPU (with temp gauge, load, speed, processes) and MEM (with usage gauge, used, free, swap).
+  - Three Bottom Panels: RAM (used/free), Disk Storage (/ and /boot), and Network I/O.
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import math
 import os
 import platform
 import socket
@@ -23,28 +23,33 @@ from PIL import Image, ImageDraw, ImageFont
 from ax206 import AX206Display, to_rgb565_be
 
 W, H = 480, 320
-SS = 2  # Supersample factor for crisp lines and text
+SS = 2  # Supersample factor for crisp rendering
 
-# ---- Modern Futuristic Palette ----
-BG        = (10, 11, 15)      # Charcoal Black
-PANEL     = (18, 20, 28)      # Dark Slate
-INK       = (245, 246, 250)    # Ice White
-DIM       = (143, 152, 179)    # Muted Silver
-TRACK     = (34, 38, 51)       # Dark Track Ring
-CYAN      = (0, 229, 255)      # CPU (Cyan)
-PURPLE    = (188, 0, 255)      # RAM (Purple)
-GREEN     = (0, 230, 118)      # Disk / Net Down (Green)
-ORANGE    = (255, 145, 0)      # Net Up (Orange)
-RED       = (255, 23, 68)      # Alert / High Temp (Red)
+# ---- AIDA64 Design Palette ----
+BG        = (0, 0, 0)         # Pitch Black background
+PANEL     = (16, 16, 16)      # Slate Dark panels
+INK       = (255, 255, 255)    # Solid White text
+DIM       = (150, 150, 150)    # Medium Gray text
+TRACK     = (40, 40, 40)       # Dark Gray track/empty bars
+CYAN      = (0, 229, 255)      # Cyberpunk Accent
+GREEN     = (0, 230, 118)      # Down speed Green
+ORANGE    = (255, 145, 0)      # Up speed Orange
+RED       = (255, 23, 68)      # Hot alert Red
 
 # ---- Font Loading ----
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_LIGHT_PATH = os.path.join(SCRIPT_DIR, "assets", "fonts", "Inter-Light.ttf")
 FONT_REGULAR_PATH = os.path.join(SCRIPT_DIR, "assets", "fonts", "Inter-Regular.ttf")
 FONT_SEMIBOLD_PATH = os.path.join(SCRIPT_DIR, "assets", "fonts", "Inter-SemiBold.ttf")
 
 
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    path = FONT_SEMIBOLD_PATH if bold else FONT_REGULAR_PATH
+def _font(size: int, bold: bool = False, light: bool = False) -> ImageFont.FreeTypeFont:
+    if light:
+        path = FONT_LIGHT_PATH
+    elif bold:
+        path = FONT_SEMIBOLD_PATH
+    else:
+        path = FONT_REGULAR_PATH
     try:
         return ImageFont.truetype(path, size)
     except Exception:
@@ -62,25 +67,30 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-# Pre-load scaled fonts (optimized for 480x320)
-F_CLOCK = _font(34 * SS, bold=True)
-F_BIG   = _font(30 * SS, bold=True)
-F_MED   = _font(16 * SS, bold=True)
-F_SMALL = _font(13 * SS, bold=True)
-F_TINY  = _font(11 * SS)
+# Pre-load fonts
+F_CLOCK = _font(34 * SS, light=True)
+F_BIG   = _font(28 * SS, bold=True)
+F_MED   = _font(15 * SS, bold=True)
+F_SMALL = _font(12 * SS, bold=True)
+F_TINY  = _font(10 * SS)
 
 
 # ---- Helper Functions ----
 
-def lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
-
-
-def cpu_color(pct: float) -> tuple[int, int, int]:
-    """Transitions CPU color Cyan -> Orange -> Red."""
-    if pct < 50:
-        return lerp(CYAN, ORANGE, pct / 50)
-    return lerp(ORANGE, RED, min(1.0, (pct - 50) / 50))
+def get_cpu_model() -> str:
+    """Read CPU model name on Linux/macOS."""
+    try:
+        if platform.system() == "Linux":
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if "model name" in line:
+                        return line.split(":")[1].strip()
+        elif platform.system() == "Darwin":
+            import subprocess
+            return subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).decode().strip()
+    except Exception:
+        pass
+    return platform.processor() or "CPU"
 
 
 def fmt_rate(bytes_per_s: float) -> str:
@@ -97,19 +107,7 @@ def text_centered(d: ImageDraw.ImageDraw, cx: float, cy: float, text: str, font:
     d.text((cx - tw / 2 - bbox[0], cy - th / 2 - bbox[1]), text, font=font, fill=fill)
 
 
-def get_os_string() -> str:
-    try:
-        info = platform.freedesktop_os_release()
-        return f"{info.get('NAME', 'Linux')} {info.get('VERSION_ID', '')}".strip()
-    except Exception:
-        sys_name = platform.system()
-        if sys_name == "Darwin":
-            return f"macOS {platform.mac_ver()[0]}"
-        return f"{sys_name} {platform.release()}"
-
-
 def get_cpu_temp() -> Optional[float]:
-    # 1. Try psutil sensors
     try:
         temps = psutil.sensors_temperatures()
         if temps:
@@ -121,8 +119,6 @@ def get_cpu_temp() -> Optional[float]:
                     return entries[0].current
     except Exception:
         pass
-
-    # 2. Try sysfs (Linux/Raspberry Pi) directly
     try:
         if os.path.exists("/sys/class/thermal/thermal_zone0/temp"):
             with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
@@ -130,25 +126,57 @@ def get_cpu_temp() -> Optional[float]:
                 return val / 1000.0
     except Exception:
         pass
-
     return None
 
 
-def ring(d: ImageDraw.ImageDraw, cx: float, cy: float, r: float, width: float, pct: float, color: tuple[int, int, int], label: str, value_text: str, sub_text: str = ""):
-    """Draws a large, highly readable ring gauge with center value, label, and subtext."""
+def draw_gears(d: ImageDraw.ImageDraw, x: float, y: float):
+    """Draw two overlapping procedural gear outlines in the logo header."""
+    # Gear 1 (large)
+    cx1, cy1 = x, y
+    r1 = 15 * SS
+    d.ellipse([cx1 - r1, cy1 - r1, cx1 + r1, cy1 + r1], outline=INK, width=2 * SS)
+    d.ellipse([cx1 - 6 * SS, cy1 - 6 * SS, cx1 + 6 * SS, cy1 + 6 * SS], outline=INK, width=2 * SS)
+    for i in range(8):
+        angle = i * (math.pi / 4)
+        x0 = cx1 + (r1 - 1 * SS) * math.cos(angle)
+        y0 = cy1 + (r1 - 1 * SS) * math.sin(angle)
+        x1 = cx1 + (r1 + 3 * SS) * math.cos(angle)
+        y1 = cy1 + (r1 + 3 * SS) * math.sin(angle)
+        d.line([x0, y0, x1, y1], fill=INK, width=3 * SS)
+
+    # Gear 2 (small)
+    cx2, cy2 = x + 23 * SS, y + 10 * SS
+    r2 = 10 * SS
+    d.ellipse([cx2 - r2, cy2 - r2, cx2 + r2, cy2 + r2], outline=INK, width=2 * SS)
+    d.ellipse([cx2 - 4 * SS, cy2 - 4 * SS, cx2 + 4 * SS, cy2 + 4 * SS], outline=INK, width=2 * SS)
+    for i in range(6):
+        angle = i * (math.pi / 3) + 0.3
+        x0 = cx2 + (r2 - 1 * SS) * math.cos(angle)
+        y0 = cy2 + (r2 - 1 * SS) * math.sin(angle)
+        x1 = cx2 + (r2 + 2 * SS) * math.cos(angle)
+        y1 = cy2 + (r2 + 2 * SS) * math.sin(angle)
+        d.line([x0, y0, x1, y1], fill=INK, width=int(2.5 * SS))
+
+
+def gauge_arc(d: ImageDraw.ImageDraw, cx: float, cy: float, r: float, width: float, pct: float, color: tuple[int, int, int], value_text: str):
+    """Draws a 270-degree tachometer-style arc from -225 deg (bottom-left) to 45 deg (bottom-right)."""
     box = [cx - r, cy - r, cx + r, cy + r]
-    # Background track
-    d.arc(box, 0, 360, fill=TRACK, width=width)
-    # Arc segment
+    # Draw track
+    d.arc(box, -225, 45, fill=TRACK, width=width)
+    # Draw active fill
     if pct > 0:
-        end = -90 + 360 * min(1.0, pct / 100)
-        d.arc(box, -90, end, fill=color, width=width)
-    # Text inside circle
+        sweep_end = -225 + 270 * min(1.0, pct / 100)
+        d.arc(box, -225, sweep_end, fill=color, width=width)
+    # Value in center
     text_centered(d, cx, cy, value_text, F_BIG, INK)
-    # Label and subtext below circle
-    text_centered(d, cx, cy + r + 16 * SS, label, F_MED, DIM)
-    if sub_text:
-        text_centered(d, cx, cy + r + 34 * SS, sub_text, F_SMALL, DIM)
+
+
+def progress_bar(d: ImageDraw.ImageDraw, x0: float, y0: float, x1: float, y1: float, pct: float, fill_color: tuple[int, int, int]):
+    """Draws a horizontal progress bar."""
+    d.rectangle([x0, y0, x1, y1], fill=TRACK)
+    if pct > 0:
+        fill_w = (x1 - x0) * min(1.0, pct / 100)
+        d.rectangle([x0, y0, x0 + fill_w, y1], fill=fill_color)
 
 
 # ---- Renderer ----
@@ -157,66 +185,139 @@ def render(state: dict) -> Image.Image:
     img = Image.new("RGB", (W * SS, H * SS), BG)
     d = ImageDraw.Draw(img)
 
-    # ---- 1. Header ----
-    hostname = socket.gethostname().split(".")[0]
-    os_info = get_os_string()
-    clock = time.strftime("%H:%M:%S")
-    date_str = time.strftime("%a %d %b")
+    # ---- 1. Top Header ----
+    # Gears Logo (Left)
+    draw_gears(d, 52 * SS, 36 * SS)
+    d.text((86 * SS, 20 * SS), "AIDA64", font=F_MED, fill=INK)
+    d.text((86 * SS, 46 * SS), "by finalwire", font=F_TINY, fill=DIM)
 
-    # Host & OS Info (Left)
-    d.text((20 * SS, 10 * SS), hostname.upper(), font=F_MED, fill=CYAN)
-    d.text((20 * SS, 30 * SS), os_info, font=F_TINY, fill=DIM)
+    # Middle Stat: CPU Load Average
+    load_str = f"{state['load'][0]:.2f} LOAD"
+    text_centered(d, 480 * SS, 38 * SS, load_str, F_MED, INK)
 
-    # Clock & Date (Right)
-    d.text((W * SS - 20 * SS, 8 * SS), clock, font=F_CLOCK, fill=INK, anchor="ra")
-    d.text((W * SS - 20 * SS, 32 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
+    # Clock (Right)
+    clock_str = time.strftime("%I:%M %p").lstrip("0")
+    d.text((W * SS - 40 * SS, 20 * SS), clock_str, font=F_CLOCK, fill=INK, anchor="ra")
 
-    # Separator Line
-    d.line([(20 * SS, 45 * SS), ((W - 20) * SS, 45 * SS)], fill=TRACK, width=2 * SS)
+    # ---- 2. Middle Panels (Two Cards) ----
+    y0, y1 = 100 * SS, 440 * SS
 
-    # ---- 2. Middle Large Circular Gauges ----
-    cy = 120 * SS
-    r = 52 * SS  # Optimised 104px radius (fits beautifully)
-    w = 10 * SS  # Bold track
+    # CPU Panel (Left)
+    cx0, cx1 = 40 * SS, 480 * SS
+    d.rectangle([cx0, y0, cx1, y1], fill=PANEL)
+    # CPU Model title
+    cpu_model = get_cpu_model()
+    # Truncate if too long to fit
+    if len(cpu_model) > 28:
+        cpu_model = cpu_model[:25] + "..."
+    d.text((cx0 + 24 * SS, y0 + 20 * SS), f"CPU  {cpu_model}", font=F_MED, fill=INK)
 
-    # CPU Ring (Left)
+    # CPU Temp gauge
+    gauge_cx = cx0 + 110 * SS
+    gauge_cy = y0 + 180 * SS
     cpu_pct = state["cpu"]
-    temp_str = f"{state['temp']:.1f}°C" if state["temp"] else "--°C"
-    ring(d, 110 * SS, cy, r, w, cpu_pct, cpu_color(cpu_pct), "CPU", f"{cpu_pct:.0f}%", temp_str)
+    temp_val = state["temp"]
+    temp_str = f"{temp_val:.0f}°C" if temp_val else f"{cpu_pct:.0f}%"
+    temp_color = RED if (temp_val and temp_val > 70) else INK
+    gauge_arc(d, gauge_cx, gauge_cy, 65 * SS, 6 * SS, temp_val if temp_val else cpu_pct, temp_color, temp_str)
 
-    # RAM Ring (Right)
+    # CPU side progress bars
+    bx0, bx1 = cx0 + 220 * SS, cx1 - 24 * SS
+    # CPU Load Bar
+    by = y0 + 110 * SS
+    d.text((bx0, by - 12 * SS), "CPU Load", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{cpu_pct:.0f}%", font=F_TINY, fill=INK, anchor="ra")
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, cpu_pct, INK)
+
+    # CPU Frequency Bar
+    by = y0 + 180 * SS
+    d.text((bx0, by - 12 * SS), "Frequency", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{state['cpu_freq']:.2f} GHz", font=F_TINY, fill=INK, anchor="ra")
+    freq_pct = (state["cpu_freq"] / state["cpu_max_freq"] * 100) if state["cpu_max_freq"] > 0 else 50
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, freq_pct, INK)
+
+    # Process Count Bar
+    by = y0 + 250 * SS
+    d.text((bx0, by - 12 * SS), "Processes", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{state['procs']} PROCS", font=F_TINY, fill=INK, anchor="ra")
+    procs_pct = (state["procs"] / 500 * 100)
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, procs_pct, INK)
+
+
+    # Memory/Swap Panel (Right)
+    cx0, cx1 = 520 * SS, 960 * SS
+    d.rectangle([cx0, y0, cx1, y1], fill=PANEL)
+    # Title
+    d.text((cx0 + 24 * SS, y0 + 20 * SS), f"MEM  DDR SYSTEM MEMORY", font=F_MED, fill=INK)
+
+    # RAM gauge
+    gauge_cx = cx0 + 110 * SS
     ram_pct = state["ram"]
-    ram_str = f"{state['ram_used']:.1f} / {state['ram_total']:.0f} GB"
-    ring(d, 370 * SS, cy, r, w, ram_pct, PURPLE, "RAM", f"{ram_pct:.0f}%", ram_str)
+    gauge_arc(d, gauge_cx, gauge_cy, 65 * SS, 6 * SS, ram_pct, INK, f"{ram_pct:.0f}%")
 
-    # ---- 3. Center Stats Column ----
-    cx = 240 * SS
-    text_centered(d, cx, cy - 40 * SS, "SYSTEM", F_TINY, DIM)
-    text_centered(d, cx, cy - 15 * SS, f"↓ {fmt_rate(state['rx'])}", F_MED, GREEN)
-    text_centered(d, cx, cy + 10 * SS, f"↑ {fmt_rate(state['tx'])}", F_MED, ORANGE)
-    
-    # Load averages (displaying 1 min load dynamically in large text)
-    load_val = state["load"][0]
-    text_centered(d, cx, cy + 32 * SS, f"load: {load_val:.2f}", F_TINY, DIM)
+    # RAM side progress bars
+    bx0, bx1 = cx0 + 220 * SS, cx1 - 24 * SS
+    # Used RAM Bar
+    by = y0 + 110 * SS
+    d.text((bx0, by - 12 * SS), "Used Memory", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{state['ram_used']:.1f} GB", font=F_TINY, fill=INK, anchor="ra")
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, ram_pct, INK)
 
-    # ---- 4. Bottom Horizontal Disk Bar ----
-    by0, by1 = 245 * SS, 265 * SS
-    disk_pct = state["disk"]
-    
-    # Labels above disk progress bar
-    d.text((20 * SS, by0 - 16 * SS), "STORAGE", font=F_TINY, fill=DIM)
-    d.text((W * SS - 20 * SS, by0 - 16 * SS), f"{state['disk_used']:.0f} / {state['disk_total']:.0f} GB ({disk_pct:.0f}%)", font=F_TINY, fill=DIM, anchor="ra")
+    # Free RAM Bar
+    by = y0 + 180 * SS
+    d.text((bx0, by - 12 * SS), "Free Memory", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{state['ram_free']:.1f} GB", font=F_TINY, fill=INK, anchor="ra")
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, 100 - ram_pct, INK)
 
-    # Progress bar container
-    d.rounded_rectangle([20 * SS, by0, (W - 20) * SS, by1], radius=6 * SS, fill=PANEL)
+    # Swap memory bar
+    by = y0 + 250 * SS
+    d.text((bx0, by - 12 * SS), "Swap Space", font=F_TINY, fill=DIM)
+    d.text((bx1, by - 12 * SS), f"{state['swap_used']:.1f} GB", font=F_TINY, fill=INK, anchor="ra")
+    swap_pct = state["swap_pct"]
+    progress_bar(d, bx0, by, bx1, by + 6 * SS, swap_pct, INK)
+
+    # ---- 3. Bottom Panels (Three Cards) ----
+    by0, by1 = 460 * SS, 620 * SS
+
+    # Bottom Left: RAM Used details
+    bx0, bx1 = 40 * SS, 320 * SS
+    d.rectangle([bx0, by0, bx1, by1], fill=PANEL)
+    d.text((bx0 + 16 * SS, by0 + 14 * SS), "RAM SYSTEM MEMORY", font=F_SMALL, fill=INK)
+    progress_bar(d, bx0 + 16 * SS, by0 + 52 * SS, bx1 - 16 * SS, by0 + 58 * SS, ram_pct, INK)
+    d.text((bx0 + 16 * SS, by0 + 78 * SS), f"U: {state['ram_used']:.1f} GB", font=F_TINY, fill=DIM)
+    d.text((bx0 + 16 * SS, by0 + 108 * SS), f"F: {state['ram_free']:.1f} GB", font=F_TINY, fill=DIM)
+    # Large percentage value
+    d.text((bx1 - 16 * SS, by0 + 94 * SS), f"{ram_pct:.0f}%", font=F_BIG, fill=INK, anchor="ra")
+
+    # Bottom Center: SSD Storage details
+    bx0, bx1 = 360 * SS, 640 * SS
+    d.rectangle([bx0, by0, bx1, by1], fill=PANEL)
+    d.text((bx0 + 16 * SS, by0 + 14 * SS), "SSD STORAGE SENSORS", font=F_SMALL, fill=INK)
     
-    # Progress bar fill
-    if disk_pct > 0:
-        fill_w = ((W - 40) * SS) * min(1.0, disk_pct / 100)
-        if fill_w > 12 * SS:
-            d.rounded_rectangle([20 * SS, by0, 20 * SS + fill_w, by1], radius=6 * SS, fill=GREEN)
-        else:
-            d.rectangle([20 * SS, by0, 20 * SS + fill_w, by1], fill=GREEN)
+    # Root partition
+    d.text((bx0 + 16 * SS, by0 + 50 * SS), "/:", font=F_TINY, fill=DIM)
+    progress_bar(d, bx0 + 48 * SS, by0 + 50 * SS, bx1 - 64 * SS, by0 + 56 * SS, state["disk_root_pct"], INK)
+    d.text((bx1 - 16 * SS, by0 + 50 * SS), f"{state['disk_root_pct']:.0f}%", font=F_TINY, fill=INK, anchor="ra")
+
+    # Boot/Swap/Var partition
+    d.text((bx0 + 16 * SS, by0 + 95 * SS), "boot:", font=F_TINY, fill=DIM)
+    progress_bar(d, bx0 + 48 * SS, by0 + 95 * SS, bx1 - 64 * SS, by0 + 101 * SS, state["disk_boot_pct"], INK)
+    d.text((bx1 - 16 * SS, by0 + 95 * SS), f"{state['disk_boot_pct']:.0f}%", font=F_TINY, fill=INK, anchor="ra")
+
+    # Bottom Right: Network rates
+    bx0, bx1 = 680 * SS, 960 * SS
+    d.rectangle([bx0, by0, bx1, by1], fill=PANEL)
+    d.text((bx0 + 16 * SS, by0 + 14 * SS), "NET Gigabit Ethernet", font=F_SMALL, fill=INK)
+    # Draw activity load bar (scaled relative to 10 MB/s limit)
+    net_load = min(100.0, (state["rx"] + state["tx"]) / 10e6 * 100.0)
+    progress_bar(d, bx0 + 16 * SS, by0 + 52 * SS, bx1 - 16 * SS, by0 + 58 * SS, net_load, INK)
+    d.text((bx0 + 16 * SS, by0 + 78 * SS), f"D: {fmt_rate(state['rx'])}", font=F_TINY, fill=GREEN)
+    d.text((bx0 + 16 * SS, by0 + 108 * SS), f"U: {fmt_rate(state['tx'])}", font=F_TINY, fill=ORANGE)
+    # Display speed label dynamically on the right
+    net_val = fmt_rate(state["rx"] + state["tx"])
+    # Simplify label to fit (e.g. 2.4M or 124K)
+    simple_net = net_val.replace(" B/s", "B").replace(" KB/s", "K").replace(" MB/s", "M")
+    d.text((bx1 - 16 * SS, by0 + 94 * SS), simple_net, font=F_BIG, fill=INK, anchor="ra")
 
     # Downsample using Lanczos for clean antialiasing
     return img.resize((W, H), Image.Resampling.LANCZOS)
@@ -227,8 +328,35 @@ def render(state: dict) -> Image.Image:
 def collect_state(prev_net, dt: float) -> tuple[dict, any]:
     cpu = psutil.cpu_percent()
     vm = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
+    swap = psutil.swap_memory()
     net = psutil.net_io_counters()
+
+    # CPU Freq
+    try:
+        freq = psutil.cpu_freq()
+        cpu_freq = freq.current / 1000.0 if freq else 2.5
+        cpu_max_freq = freq.max / 1000.0 if freq else 4.0
+    except Exception:
+        cpu_freq, cpu_max_freq = 2.5, 4.0
+
+    # Processes count
+    try:
+        procs = len(psutil.pids())
+    except Exception:
+        procs = 120
+
+    # Disk partitions
+    try:
+        disk_root = psutil.disk_usage("/")
+        disk_root_pct = disk_root.percent
+    except Exception:
+        disk_root_pct = 50.0
+
+    try:
+        disk_boot = psutil.disk_usage("/boot")
+        disk_boot_pct = disk_boot.percent
+    except Exception:
+        disk_boot_pct = disk_root_pct
 
     rx = (net.bytes_recv - prev_net.bytes_recv) / dt if dt > 0 else 0
     tx = (net.bytes_sent - prev_net.bytes_sent) / dt if dt > 0 else 0
@@ -240,12 +368,17 @@ def collect_state(prev_net, dt: float) -> tuple[dict, any]:
 
     return {
         "cpu": cpu,
+        "cpu_freq": cpu_freq,
+        "cpu_max_freq": cpu_max_freq,
+        "procs": procs,
         "ram": vm.percent,
         "ram_used": vm.used / 1e9,
+        "ram_free": vm.available / 1e9,
         "ram_total": vm.total / 1e9,
-        "disk": disk.percent,
-        "disk_used": disk.used / 1e9,
-        "disk_total": disk.total / 1e9,
+        "swap_used": swap.used / 1e9,
+        "swap_pct": swap.percent,
+        "disk_root_pct": disk_root_pct,
+        "disk_boot_pct": disk_boot_pct,
         "rx": rx,
         "tx": tx,
         "temp": get_cpu_temp(),
@@ -254,7 +387,7 @@ def collect_state(prev_net, dt: float) -> tuple[dict, any]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Descriptive highly readable AX206 Dashboard")
+    ap = argparse.ArgumentParser(description="AIDA64 styling layout")
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between screen updates")
     ap.add_argument("--frames", type=int, default=0, help="exit after N frames (0=run forever)")
     args = ap.parse_args()
@@ -264,7 +397,7 @@ def main() -> int:
     last = time.time()
 
     with AX206Display() as s:
-        print(f"sysdash running ({s.width}x{s.height}) in readable high-contrast layout, Ctrl-C to stop")
+        print(f"sysdash running ({s.width}x{s.height}) in AIDA64 style, Ctrl-C to stop")
         count = 0
         glitches = 0
         consec = 0
@@ -304,7 +437,7 @@ def main() -> int:
             count += 1
 
             if count == 1 or count % 10 == 0:
-                print(f"frame {count}: cpu {state['cpu']:.0f}% ram {state['ram']:.0f}% disk {state['disk']:.0f}% "
+                print(f"frame {count}: cpu {state['cpu']:.0f}% ram {state['ram']:.0f}% root {state['disk_root_pct']:.0f}% "
                       f"render+push {push_ms:.0f}ms (glitches {glitches})", flush=True)
 
             if args.frames and count >= args.frames:
