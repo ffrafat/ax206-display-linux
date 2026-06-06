@@ -1,63 +1,128 @@
-# ax206-usb-display-macos
+# ax206-smartcool-sysmon-linux
 
 Drives the small 3.5" "QDtech USB-Display" (USB id `1908:0102`, sold as an
-AIDA64 secondary screen) from **macOS** over libusb — no Windows-only vendor
-software needed. Includes a clean driver, an image viewer, and a live system
-monitor dashboard.
-
-The device is an **AX206 digital-photo-frame clone** (the "SmartCool" firmware
-variant). Its protocol was reverse-engineered from
-[dreamlayers/dpf-ax](https://github.com/dreamlayers/dpf-ax) and confirmed on
-real hardware. Pure-Python, works on Apple Silicon.
+AIDA64 secondary screen and based on the SmartCool AX206 firmware variant) over libusb. This project is a tailored Linux system monitor dashboard, but maintains cross-platform compatibility with macOS.
 
 Panel: **480×320 landscape, RGB565, USB 1.1** (~1.4 full-screen fps).
 
 <p align="center">
   <img src="docs/dashboard-2x.png" width="480"
-       alt="Live system dashboard on the 480x320 screen: clock, CPU and RAM ring gauges, network up/down, CPU history sparkline">
+       alt="Live system dashboard on the 480x320 screen: hostname, clock, CPU, RAM, and Disk ring gauges, network up/down, CPU history sparkline">
   <br>
-  <em>dashboard.py output (rendered frame — pixel-identical to what the panel shows)</em>
+  <em>sysdash.py output (rendered frame — pixel-identical to what the panel shows)</em>
 </p>
+
+## Credits & Attribution
+This project is a fork of and heavily based on:
+- [sunzhengya/ax206-usb-display-macos](https://github.com/sunzhengya/ax206-usb-display-macos) — the original clean driver and macOS dashboard.
+- [dreamlayers/dpf-ax](https://github.com/dreamlayers/dpf-ax) — the authoritative source for the DPF AX206 CBW/BLIT command set.
+- [mathoudebine/turing-smart-screen-python](https://github.com/mathoudebine/turing-smart-screen-python) — reference codebase for USB info-displays.
+
+---
 
 ## Files
 - `ax206.py` — the driver (`AX206Display`: `open`, `blit`, `fill`, `draw_image`, `recover`, `reopen`)
 - `show_image.py` — CLI to show an image / solid color / test pattern
-- `dashboard.py` — live system-monitor dashboard (CPU/RAM rings, net, CPU history)
+- `sysdash.py` — Linux system-monitor dashboard (CPU temp, Hostname, 3-ring layout for CPU/RAM/Disk, network I/O, and CPU history)
+- `assets/fonts/` — bundled premium Inter font for consistent rendering on headless servers
 
-## Setup
+---
+
+## Installation & Setup (Debian-based Linux)
+
+### 1. Install System Dependencies
+Install `libusb` and tools required to build Python dependencies:
 ```bash
+sudo apt update
+sudo apt install -y git python3-venv python3-dev libusb-1.0-0-dev build-essential fonts-liberation
+```
+
+### 2. Clone Repository & Install Python Packages
+```bash
+git clone https://github.com/ffrafat/ax206-display-linux.git ~/ax206-usb-display
+cd ~/ax206-usb-display
 python3 -m venv .venv
 .venv/bin/pip install pyusb pillow numpy psutil
-brew install libusb
 ```
+
+### 3. Setup USB Permissions (udev)
+Allow non-root users to write to the USB display:
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1908", ATTR{idProduct}=="0102", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ax206.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+*Note: Unplug and replug the display's USB cable after setting this rule.*
+
+---
 
 ## Usage
+
+### Test Screen Output
+Verify the connection and screen rendering:
 ```bash
-.venv/bin/python show_image.py photo.jpg            # show an image (letterboxed)
-.venv/bin/python show_image.py wall.png --fit stretch
-.venv/bin/python show_image.py --color ff8800       # solid color
-.venv/bin/python dashboard.py                        # live monitor (Ctrl-C to stop)
+.venv/bin/python show_image.py --test
 ```
 
-## Protocol notes (important)
+### Run Dashboard in Foreground
+```bash
+.venv/bin/python sysdash.py
+```
+*(Press `Ctrl-C` to stop)*
+
+### Run Dashboard as a Background Service (Systemd)
+To run the dashboard continuously in the background and start automatically on boot:
+
+1. Create a service file:
+   ```bash
+   cat << EOF | sudo tee /etc/systemd/system/ax206.service
+   [Unit]
+   Description=AX206 USB Display System Monitor
+   After=network.target
+
+   [Service]
+   Type=simple
+   User=$USER
+   WorkingDirectory=$HOME/ax206-usb-display
+   ExecStart=$HOME/ax206-usb-display/.venv/bin/python sysdash.py
+   Restart=always
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   ```
+
+2. Register and start the daemon:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable ax206.service
+   sudo systemctl start ax206.service
+   ```
+
+3. Manage the background daemon:
+   - **View status:** `sudo systemctl status ax206`
+   - **Read logs:** `sudo journalctl -u ax206 -f`
+   - **Stop process:** `sudo systemctl stop ax206`
+
+---
+
+## Setup on macOS
+For local testing or use on macOS:
+```bash
+brew install libusb
+python3 -m venv .venv
+.venv/bin/pip install pyusb pillow numpy psutil
+.venv/bin/python sysdash.py
+```
+
+---
+
+## Protocol notes
 - Geometry is fixed **480×320 landscape**. Pixels are **RGB565 big-endian**.
 - Transport is USB Mass-Storage Bulk-Only: 31-byte CBW (`USBC`…) + data + 13-byte CSW (`USBS`…).
-- **BLIT (CDB op `0x12`) is the ONLY command this firmware implements.** Any other
-  vendor command — SCSI INQUIRY, GETLCD, SETPROPERTY/brightness — times out and
-  **wedges the USB endpoint**, requiring a physical unplug/replug to recover. The
-  driver therefore only ever sends BLIT.
-- The device is single-owner: only one program may hold it at a time.
+- **BLIT (CDB op `0x12`) is the ONLY command this firmware implements.** Any other vendor command — SCSI INQUIRY, GETLCD, SETPROPERTY/brightness — times out and **wedges the USB endpoint**, requiring a physical unplug/replug to recover.
 - Occasional CSW glitches self-heal via `recover()` (MSC reset + clear_halt) / `reopen()`.
-
-## Credits
-Protocol knowledge and prior art from these projects (please support them):
-- [dreamlayers/dpf-ax](https://github.com/dreamlayers/dpf-ax) — the AX206 DPF
-  tools and firmware; the authoritative source for the CBW/BLIT command set.
-- [mathoudebine/turing-smart-screen-python](https://github.com/mathoudebine/turing-smart-screen-python)
-  — broad reference for this family of USB info-displays.
-- The AIDA64 community forums, for identifying `1908:0102` as an AX206/SmartCool unit.
-
-This is an independent, clean-room Python reimplementation for macOS.
 
 ## License
 GPL-3.0. See [LICENSE](LICENSE).
