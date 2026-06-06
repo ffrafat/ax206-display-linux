@@ -2,9 +2,10 @@
 """Linux-focused system-monitor dashboard for the AX206 SmartCool USB screen.
 
 Renders a highly readable, compact, dark card-based dashboard:
-  - Header: Procedural Debian swirl logo, system load, and thin clock.
-  - CPU & RAM Cards (Middle): Large circular gauges (CPU Temp, RAM Usage %) and thick progress bars (Load, Freq, RAM Used, Free).
-  - Storage & Network Cards (Bottom): Disk partition fills (/ and /boot) and clear Network speeds.
+  - Header: Procedural Debian swirl logo, hostname, local IP, OS distro info, and thin clock.
+  - CPU Card (Middle-Left): CPU Temp gauge, Load (%), and Frequency.
+  - RAM Card (Middle-Right): RAM Usage gauge, Used, and Free details.
+  - Storage & Network Cards (Bottom): Disk partition usage (/ and /boot) and Network throughput speeds.
 """
 from __future__ import annotations
 
@@ -91,6 +92,30 @@ def get_cpu_model() -> str:
     return platform.processor() or "CPU"
 
 
+def get_ip_address() -> str:
+    """Find the primary local IP address of the system."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Connect to an external host (does not send actual packets)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def get_os_string() -> str:
+    try:
+        info = platform.freedesktop_os_release()
+        return f"{info.get('NAME', 'Linux')} {info.get('VERSION_ID', '')}".strip()
+    except Exception:
+        sys_name = platform.system()
+        if sys_name == "Darwin":
+            return f"macOS {platform.mac_ver()[0]}"
+        return f"{sys_name} {platform.release()}"
+
+
 def fmt_rate(bytes_per_s: float) -> str:
     if bytes_per_s >= 1e6:
         return f"{bytes_per_s / 1e6:.1f} MB/s"
@@ -163,21 +188,19 @@ def render(state: dict) -> Image.Image:
     d = ImageDraw.Draw(img)
 
     # ---- 1. Top Header ----
-    # Debian Logo & Host Info (Left)
+    # Debian Logo & Host / IP Info (Left)
     draw_debian_logo(d, 20 * SS, 12 * SS)
     hostname = socket.gethostname().split(".")[0].upper()
-    d.text((54 * SS, 12 * SS), hostname, font=F_MED, fill=INK)
-    d.text((54 * SS, 32 * SS), "DEBIAN LINUX SERVER", font=F_TINY, fill=DIM)
+    d.text((54 * SS, 10 * SS), hostname, font=F_MED, fill=INK)
+    d.text((54 * SS, 30 * SS), f"IP: {state['ip']}", font=F_TINY, fill=DIM)
 
-    # Load Average (Center-aligned to prevent overlap)
-    load_str = f"{state['load'][0]:.2f} LOAD"
-    text_centered(d, 480 * SS, 26 * SS, load_str, F_MED, INK)
+    # OS Info (Center-aligned to prevent overlap)
+    os_info = get_os_string()
+    text_centered(d, 480 * SS, 26 * SS, os_info, F_TINY, DIM)
 
-    # Clock & Date (Right)
+    # Clock (Right - ONLY Clock, Date & Load removed to clean area)
     clock_str = time.strftime("%I:%M %p").lstrip("0")
-    d.text((W * SS - 20 * SS, 8 * SS), clock_str, font=F_CLOCK, fill=INK, anchor="ra")
-    date_str = time.strftime("%a %d %b")
-    d.text((W * SS - 20 * SS, 32 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
+    d.text((W * SS - 20 * SS, 16 * SS), clock_str, font=F_CLOCK, fill=INK, anchor="ra")
 
     # Separator Line
     d.line([(20 * SS, 50 * SS), ((W - 20) * SS, 50 * SS)], fill=TRACK, width=2 * SS)
@@ -190,15 +213,14 @@ def render(state: dict) -> Image.Image:
     d.rounded_rectangle([cx0, my0, cx1, my1], radius=6 * SS, fill=PANEL)
     
     # Title & CPU model
-    d.text((cx0 + 12 * SS, my0 + 10 * SS), "CPU", font=F_TINY, fill=DIM)
+    d.text((cx0 + 12 * SS, my0 + 10 * SS), "CPU TEMP / SPEED", font=F_TINY, fill=DIM)
     cpu_model = get_cpu_model()
-    # Format model name cleanly
     clean_cpu = cpu_model.replace("(R)", "").replace("(TM)", "").replace("CPU", "").strip()
     if len(clean_cpu) > 20:
         clean_cpu = clean_cpu[:18] + "..."
     d.text((cx0 + 12 * SS, my0 + 25 * SS), clean_cpu, font=F_TINY, fill=INK)
 
-    # CPU Arc Gauge (Temp/Usage)
+    # CPU Arc Gauge (Displays Temperature inside)
     gauge_cx = cx0 + 52 * SS
     gauge_cy = my0 + 83 * SS
     cpu_pct = state["cpu"]
@@ -206,6 +228,8 @@ def render(state: dict) -> Image.Image:
     temp_str = f"{temp_val:.0f}°C" if temp_val else f"{cpu_pct:.0f}%"
     temp_color = RED if (temp_val and temp_val > 70) else CYAN
     gauge_arc(d, gauge_cx, gauge_cy, 42 * SS, 5 * SS, temp_val if temp_val else cpu_pct, temp_color, temp_str)
+    # Gauge label underneathcircle
+    text_centered(d, gauge_cx, gauge_cy + 42 * SS + 16 * SS, "CPU TEMP", F_TINY, DIM)
 
     # CPU side progress bars (LOAD and FREQ)
     bx0, bx1 = cx0 + 104 * SS, cx1 - 12 * SS
@@ -229,13 +253,14 @@ def render(state: dict) -> Image.Image:
     d.rounded_rectangle([cx0, my0, cx1, my1], radius=6 * SS, fill=PANEL)
 
     # Title & RAM Details
-    d.text((cx0 + 12 * SS, my0 + 10 * SS), "RAM", font=F_TINY, fill=DIM)
+    d.text((cx0 + 12 * SS, my0 + 10 * SS), "RAM UTILIZATION", font=F_TINY, fill=DIM)
     d.text((cx0 + 12 * SS, my0 + 25 * SS), f"{state['ram_total']:.1f} GB Total", font=F_TINY, fill=INK)
 
     # RAM Arc Gauge
     gauge_cx = cx0 + 52 * SS
     ram_pct = state["ram"]
     gauge_arc(d, gauge_cx, gauge_cy, 42 * SS, 5 * SS, ram_pct, PURPLE, f"{ram_pct:.0f}%")
+    text_centered(d, gauge_cx, gauge_cy + 42 * SS + 16 * SS, "RAM", F_TINY, DIM)
 
     # RAM side progress bars (USED and FREE)
     bx0, bx1 = cx0 + 104 * SS, cx1 - 12 * SS
@@ -318,11 +343,6 @@ def collect_state(prev_net, dt: float) -> tuple[dict, any]:
     rx = (net.bytes_recv - prev_net.bytes_recv) / dt if dt > 0 else 0
     tx = (net.bytes_sent - prev_net.bytes_sent) / dt if dt > 0 else 0
 
-    try:
-        load = psutil.getloadavg()
-    except Exception:
-        load = (0.0, 0.0, 0.0)
-
     return {
         "cpu": cpu,
         "cpu_freq": cpu_freq,
@@ -336,7 +356,7 @@ def collect_state(prev_net, dt: float) -> tuple[dict, any]:
         "rx": rx,
         "tx": tx,
         "temp": get_cpu_temp(),
-        "load": load,
+        "ip": get_ip_address(),
     }, net
 
 
