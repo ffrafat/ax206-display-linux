@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Linux-focused system-monitor dashboard for the AX206 SmartCool USB screen.
 
-Renders a 480x320 dark dashboard for the SmartCool AX206 variant with:
-  - Header: Hostname, OS distro info, clock, date, and CPU temp.
-  - Three Ring Gauges: CPU (%), RAM (%), and Disk (%).
-  - Bottom-Left Panel: Live Network download/upload rates.
-  - Bottom-Right Panel: CPU load history sparkline.
+Renders a 480x320 highly readable dashboard with:
+  - Header: Hostname, OS distro info, clock, and date.
+  - Two Large Ring Gauges: CPU (%) and RAM (%).
+  - Center Column: Live Network speeds, system load average, and CPU temperature.
+  - Bottom Row: Wide horizontal progress bar for Disk usage.
 """
 from __future__ import annotations
 
@@ -37,9 +37,6 @@ GREEN     = (0, 230, 118)      # Disk / Net Down (Green)
 ORANGE    = (255, 145, 0)      # Net Up (Orange)
 RED       = (255, 23, 68)      # Alert / High Temp (Red)
 
-# Blended transparent fill for sparkline (15% Cyan over BG)
-SPARK_FILL = (8, 44, 51)
-
 # ---- Font Loading ----
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_REGULAR_PATH = os.path.join(SCRIPT_DIR, "assets", "fonts", "Inter-Regular.ttf")
@@ -65,12 +62,12 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-# Pre-load scaled fonts
-F_CLOCK = _font(28 * SS, bold=True)
-F_BIG   = _font(24 * SS, bold=True)
-F_MED   = _font(15 * SS, bold=True)
-F_SMALL = _font(13 * SS)
-F_TINY  = _font(11 * SS)
+# Pre-load scaled fonts (Enlarged for readability)
+F_CLOCK = _font(38 * SS, bold=True)
+F_BIG   = _font(36 * SS, bold=True)
+F_MED   = _font(20 * SS, bold=True)
+F_SMALL = _font(14 * SS, bold=True)
+F_TINY  = _font(12 * SS)
 
 
 # ---- Helper Functions ----
@@ -138,20 +135,20 @@ def get_cpu_temp() -> Optional[float]:
 
 
 def ring(d: ImageDraw.ImageDraw, cx: float, cy: float, r: float, width: float, pct: float, color: tuple[int, int, int], label: str, value_text: str, sub_text: str = ""):
-    """Draws a premium ring gauge with center value, label, and subtext below."""
+    """Draws a large, highly readable ring gauge with center value, label, and subtext."""
     box = [cx - r, cy - r, cx + r, cy + r]
     # Background track
     d.arc(box, 0, 360, fill=TRACK, width=width)
-    # Arc segment (starts at -90 deg / top, moves clockwise)
+    # Arc segment
     if pct > 0:
         end = -90 + 360 * min(1.0, pct / 100)
         d.arc(box, -90, end, fill=color, width=width)
     # Text inside
-    text_centered(d, cx, cy - 10 * SS, value_text, F_BIG, INK)
-    text_centered(d, cx, cy + 16 * SS, label, F_TINY, DIM)
-    # Subtext below
+    text_centered(d, cx, cy, value_text, F_BIG, INK)
+    # Label and subtext below circle
+    text_centered(d, cx, cy + r + 30 * SS, label, F_MED, DIM)
     if sub_text:
-        text_centered(d, cx, cy + 96 * SS, sub_text, F_TINY, DIM)
+        text_centered(d, cx, cy + r + 70 * SS, sub_text, F_SMALL, DIM)
 
 
 # ---- Renderer ----
@@ -167,80 +164,61 @@ def render(state: dict) -> Image.Image:
     date_str = time.strftime("%a %d %b")
 
     # Host & OS Info (Left)
-    d.text((16 * SS, 12 * SS), hostname, font=F_MED, fill=CYAN)
-    d.text((16 * SS, 42 * SS), os_info, font=F_TINY, fill=DIM)
+    d.text((20 * SS, 16 * SS), hostname.upper(), font=F_MED, fill=CYAN)
+    d.text((20 * SS, 56 * SS), os_info, font=F_TINY, fill=DIM)
 
     # Clock & Date (Right)
-    d.text((W * SS - 16 * SS, 8 * SS), clock, font=F_CLOCK, fill=INK, anchor="ra")
-    d.text((W * SS - 16 * SS, 42 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
+    d.text((W * SS - 20 * SS, 10 * SS), clock, font=F_CLOCK, fill=INK, anchor="ra")
+    d.text((W * SS - 20 * SS, 60 * SS), date_str, font=F_TINY, fill=DIM, anchor="ra")
 
     # Separator Line
-    d.line([(16 * SS, 70 * SS), ((W - 16) * SS, 70 * SS)], fill=TRACK, width=1 * SS)
+    d.line([(20 * SS, 90 * SS), ((W - 20) * SS, 90 * SS)], fill=TRACK, width=2 * SS)
 
-    # ---- 2. Middle Ring Gauges ----
-    cy = 200 * SS
-    r = 66 * SS
-    w = 10 * SS
+    # ---- 2. Middle Large Circular Gauges ----
+    cy = 260 * SS
+    r = 80 * SS  # Large 160px diameter
+    w = 12 * SS  # Bold track
 
     # CPU Ring (Left)
     cpu_pct = state["cpu"]
+    temp_color = RED if (state["temp"] and state["temp"] > 70) else CYAN
     temp_str = f"{state['temp']:.1f}°C" if state["temp"] else "--°C"
-    ring(d, 200 * SS, cy, r, w, cpu_pct, cpu_color(cpu_pct), "CPU", f"{cpu_pct:.0f}%", temp_str)
+    ring(d, 180 * SS, cy, r, w, cpu_pct, cpu_color(cpu_pct), "CPU", f"{cpu_pct:.0f}%", temp_str)
 
-    # RAM Ring (Center)
+    # RAM Ring (Right)
     ram_pct = state["ram"]
-    ram_str = f"{state['ram_used']:.1f}/{state['ram_total']:.0f} GB"
-    ring(d, 480 * SS, cy, r, w, ram_pct, PURPLE, "RAM", f"{ram_pct:.0f}%", ram_str)
+    ram_str = f"{state['ram_used']:.1f} / {state['ram_total']:.0f} GB"
+    ring(d, 780 * SS, cy, r, w, ram_pct, PURPLE, "RAM", f"{ram_pct:.0f}%", ram_str)
 
-    # Disk Ring (Right)
+    # ---- 3. Center Stats Column ----
+    cx = 480 * SS
+    text_centered(d, cx, cy - 70 * SS, "SYSTEM", F_TINY, DIM)
+    text_centered(d, cx, cy - 30 * SS, f"↓ {fmt_rate(state['rx'])}", F_MED, GREEN)
+    text_centered(d, cx, cy + 15 * SS, f"↑ {fmt_rate(state['tx'])}", F_MED, ORANGE)
+    
+    # Load averages (displaying 1 min load dynamically in large text)
+    load_val = state["load"][0]
+    text_centered(d, cx, cy + 60 * SS, f"load: {load_val:.2f}", F_TINY, DIM)
+
+    # ---- 4. Bottom Horizontal Disk Bar ----
+    bx0, by0, bx1, by1 = 32 * SS, 512 * SS, 928 * SS, 560 * SS
     disk_pct = state["disk"]
-    disk_str = f"{state['disk_used']:.0f}/{state['disk_total']:.0f} GB"
-    ring(d, 760 * SS, cy, r, w, disk_pct, GREEN, "DISK", f"{disk_pct:.0f}%", disk_str)
+    
+    # Labels above disk progress bar
+    d.text((bx0, by0 - 36 * SS), "STORAGE", font=F_TINY, fill=DIM)
+    d.text((bx1, by0 - 36 * SS), f"{state['disk_used']:.0f} / {state['disk_total']:.0f} GB ({disk_pct:.0f}%)", font=F_TINY, fill=DIM, anchor="ra")
 
-    # ---- 3. Bottom Panels ----
-    by0, by1 = 360 * SS, 608 * SS
-
-    # Panel 1: Network Stats (Left)
-    nx0, nx1 = 32 * SS, 464 * SS
-    d.rounded_rectangle([nx0, by0, nx1, by1], radius=12 * SS, fill=PANEL)
-    d.text((nx0 + 16 * SS, by0 + 16 * SS), "NETWORK", font=F_TINY, fill=DIM)
-
-    # Down Arrow and Rate
-    d.text((nx0 + 24 * SS, by0 + 72 * SS), "↓", font=F_BIG, fill=GREEN)
-    d.text((nx0 + 64 * SS, by0 + 74 * SS), fmt_rate(state["rx"]), font=F_MED, fill=INK)
-    d.text((nx0 + 64 * SS, by0 + 110 * SS), "DOWNLOAD", font=F_TINY, fill=DIM)
-
-    # Up Arrow and Rate
-    d.text((nx0 + 24 * SS, by0 + 148 * SS), "↑", font=F_BIG, fill=ORANGE)
-    d.text((nx0 + 64 * SS, by0 + 150 * SS), fmt_rate(state["tx"]), font=F_MED, fill=INK)
-    d.text((nx0 + 64 * SS, by0 + 186 * SS), "UPLOAD", font=F_TINY, fill=DIM)
-
-    # Panel 2: CPU History Sparkline (Right)
-    sx0, sx1 = 496 * SS, 928 * SS
-    d.rounded_rectangle([sx0, by0, sx1, by1], radius=12 * SS, fill=PANEL)
-    d.text((sx0 + 16 * SS, by0 + 16 * SS), "CPU LOAD HISTORY", font=F_TINY, fill=DIM)
-
-    hist = state["cpu_hist"]
-    if len(hist) >= 2:
-        hx0 = sx0 + 16 * SS
-        hy0 = by0 + 64 * SS
-        hx1 = sx1 - 16 * SS
-        hy1 = by1 - 16 * SS
-        plot_w = hx1 - hx0
-        plot_h = hy1 - hy0
-        n = len(hist)
-
-        pts = []
-        for i, val in enumerate(hist):
-            x = hx0 + plot_w * i / (n - 1)
-            y = hy1 - plot_h * (val / 100)
-            pts.append((x, y))
-
-        # Filled area below sparkline
-        poly = pts + [(pts[-1][0], hy1), (pts[0][0], hy1)]
-        d.polygon(poly, fill=SPARK_FILL)
-        # Line plot
-        d.line(pts, fill=CYAN, width=2 * SS, joint="curve")
+    # Progress bar container
+    d.rounded_rectangle([bx0, by0, bx1, by1], radius=8 * SS, fill=PANEL)
+    
+    # Progress bar fill
+    if disk_pct > 0:
+        fill_w = (bx1 - bx0) * min(1.0, disk_pct / 100)
+        # Ensure we draw a valid rounded rect if width > 2 * radius
+        if fill_w > 16 * SS:
+            d.rounded_rectangle([bx0, by0, bx0 + fill_w, by1], radius=8 * SS, fill=GREEN)
+        else:
+            d.rectangle([bx0, by0, bx0 + fill_w, by1], fill=GREEN)
 
     # Downsample using Lanczos for clean antialiasing
     return img.resize((W, H), Image.Resampling.LANCZOS)
@@ -248,7 +226,7 @@ def render(state: dict) -> Image.Image:
 
 # ---- Core Cycle ----
 
-def collect_state(prev_net, dt: float, cpu_hist: collections.deque) -> tuple[dict, any]:
+def collect_state(prev_net, dt: float) -> tuple[dict, any]:
     cpu = psutil.cpu_percent()
     vm = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
@@ -256,7 +234,11 @@ def collect_state(prev_net, dt: float, cpu_hist: collections.deque) -> tuple[dic
 
     rx = (net.bytes_recv - prev_net.bytes_recv) / dt if dt > 0 else 0
     tx = (net.bytes_sent - prev_net.bytes_sent) / dt if dt > 0 else 0
-    cpu_hist.append(cpu)
+
+    try:
+        load = psutil.getloadavg()
+    except Exception:
+        load = (0.0, 0.0, 0.0)
 
     return {
         "cpu": cpu,
@@ -269,23 +251,22 @@ def collect_state(prev_net, dt: float, cpu_hist: collections.deque) -> tuple[dic
         "rx": rx,
         "tx": tx,
         "temp": get_cpu_temp(),
-        "cpu_hist": list(cpu_hist),
+        "load": load,
     }, net
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Redesigned AX206 System Monitor Dashboard")
+    ap = argparse.ArgumentParser(description="Descriptive highly readable AX206 Dashboard")
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between screen updates")
     ap.add_argument("--frames", type=int, default=0, help="exit after N frames (0=run forever)")
     args = ap.parse_args()
 
-    cpu_hist = collections.deque(maxlen=60)  # Fits the plot width perfectly
     psutil.cpu_percent()  # Prime CPU metric
     prev_net = psutil.net_io_counters()
     last = time.time()
 
     with AX206Display() as s:
-        print(f"sysdash running ({s.width}x{s.height}) in modern dark layout, Ctrl-C to stop")
+        print(f"sysdash running ({s.width}x{s.height}) in readable high-contrast layout, Ctrl-C to stop")
         count = 0
         glitches = 0
         consec = 0
@@ -297,7 +278,7 @@ def main() -> int:
             dt = now - last
             last = now
 
-            state, prev_net = collect_state(prev_net, dt, cpu_hist)
+            state, prev_net = collect_state(prev_net, dt)
             t0 = time.time()
             frame = render(state)
 
