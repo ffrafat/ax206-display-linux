@@ -30,29 +30,49 @@ This project is a fork of and heavily based on:
 
 ## Installation & Setup (Debian-based Linux)
 
-### 1. Install System Dependencies
-Install `libusb` and tools required to build Python dependencies:
+### Automatic Setup (Recommended)
+You can set up everything (system libraries, python environment, udev rules, and the background systemd service) by running this automated command:
 ```bash
-sudo apt update
-sudo apt install -y git python3-venv python3-dev libusb-1.0-0-dev build-essential fonts-liberation
+curl -sSL https://raw.githubusercontent.com/ffrafat/ax206-display-linux/main/install.sh | bash
 ```
+*⚠️ Note: Unplug the display's USB cable and plug it back in after the script finishes to apply permissions.*
 
-### 2. Clone Repository & Install Python Packages
-```bash
-git clone https://github.com/ffrafat/ax206-display-linux.git ~/ax206-usb-display
-cd ~/ax206-usb-display
-python3 -m venv .venv
-.venv/bin/pip install pyusb pillow numpy psutil
-```
+### Update & Uninstall
+* **To update to the latest code:**
+  ```bash
+  cd ~/ax206-usb-display && ./update.sh
+  ```
+* **To completely uninstall:**
+  ```bash
+  cd ~/ax206-usb-display && ./uninstall.sh
+  ```
 
-### 3. Setup USB Permissions (udev)
-Allow non-root users to write to the USB display:
-```bash
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1908", ATTR{idProduct}=="0102", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ax206.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-*Note: Unplug and replug the display's USB cable after setting this rule.*
+---
+
+### Manual Setup Steps (Alternative)
+If you prefer to set up the environment manually:
+
+1. Install system dependencies:
+   ```bash
+   sudo apt update
+   sudo apt install -y git python3-venv python3-dev libusb-1.0-0-dev build-essential fonts-liberation
+   ```
+
+2. Clone repository & install packages:
+   ```bash
+   git clone https://github.com/ffrafat/ax206-display-linux.git ~/ax206-usb-display
+   cd ~/ax206-usb-display
+   python3 -m venv .venv
+   .venv/bin/pip install pyusb pillow numpy psutil
+   ```
+
+3. Setup USB permissions (udev):
+   ```bash
+   echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1908", ATTR{idProduct}=="0102", MODE="0666"' | sudo tee /etc/udev/rules.d/99-ax206.rules
+   sudo udevadm control --reload-rules
+   sudo udevadm trigger
+   ```
+   *Unplug and replug the display's USB cable after setting this rule.*
 
 ---
 
