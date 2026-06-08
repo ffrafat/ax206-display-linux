@@ -7,7 +7,7 @@ Panel: **480×320 landscape, RGB565, USB 1.1** (~1.4 full-screen fps).
 
 <p align="center">
   <img src="docs/dashboard-2x.png" width="480"
-       alt="Live system dashboard on the 480x320 screen: hostname, clock, CPU, RAM, and Disk ring gauges, network up/down, CPU history sparkline">
+       alt="Live system dashboard on the 480x320 screen: hostname, clock, CPU and RAM arc gauges, storage and network bars">
   <br>
   <em>sysdash.py output (rendered frame — pixel-identical to what the panel shows)</em>
 </p>
@@ -23,8 +23,8 @@ This project is a fork of and heavily based on:
 ## Files
 - `ax206.py` — the driver (`AX206Display`: `open`, `blit`, `fill`, `draw_image`, `recover`, `reopen`)
 - `show_image.py` — CLI to show an image / solid color / test pattern
-- `sysdash.py` — Linux system-monitor dashboard (CPU temp, Hostname, 3-ring layout for CPU/RAM/Disk, network I/O, and CPU history)
-- `assets/fonts/` — bundled premium Inter font for consistent rendering on headless servers
+- `sysdash.py` — cross-platform system-monitor dashboard (CPU temp/load arc gauge, RAM arc gauge, storage and network bars)
+- `assets/fonts/` — optional Inter fonts for consistent rendering (falls back to Liberation Sans / Arial)
 
 ---
 
