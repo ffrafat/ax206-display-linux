@@ -23,7 +23,7 @@ This project is a fork of and heavily based on:
 ## Files
 - `ax206.py` — the driver (`AX206Display`: `open`, `blit`, `fill`, `draw_image`, `recover`, `reopen`)
 - `show_image.py` — CLI to show an image / solid color / test pattern
-- `sysdash.py` — cross-platform system monitor (2×2 cards: CPU, RAM, Disk, Net)
+- `sysdash.py` — alternates clock (3s) and stats (3s): full-screen HH:MM clock + 2×2 system cards
 - `assets/fonts/` — optional Inter fonts for consistent rendering (falls back to Liberation Sans / Arial)
 
 ---
