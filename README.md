@@ -1,29 +1,47 @@
-# ax206-display-linux
+# ax206-display
 
-**A Python system-monitor dashboard for the cheap AX206 USB display** — the 3.5 inch USB screen sold on AliExpress, eBay, and Amazon under many names: *SmartCool*, *QDtech USB Display*, *AIDA64 USB Secondary Screen*, *DPF USB photoframe*, and similar. Runs on Linux (Raspberry Pi, Ubuntu, Debian) and macOS.
+**A Python dashboard for the AX206 USB display** — the cheap 480×320 USB screen sold on AliExpress, eBay, and Amazon as *SmartCool*, *QDtech USB Display*, *AIDA64 USB Secondary Screen*, *DPF USB photoframe*, and similar.
 
-<p align="center">
-  <img src="docs/dashboard-hero.png" width="960"
-       alt="AX206 USB display showing a dark system-monitor dashboard with CPU temp, RAM, disk and network cards plus a full-screen clock">
-  <br>
-  <em>Stats screen (left) and clock screen (right) — pixel-identical to what the panel shows.</em>
-</p>
+Runs on **Linux**, **macOS**, and **Windows** — no official driver needed.
+
+---
+
+## Screens
+
+The three built-in screens rotate every 10 seconds. They are **sample screens** — the rendering is plain Python + Pillow, so you can display anything you can draw: custom metrics, alerts, weather, stock prices, home automation status, whatever. No special framework required.
+
+<table>
+<tr>
+  <td align="center"><b>Stats</b></td>
+  <td align="center"><b>Clock</b></td>
+  <td align="center"><b>Claude Usage</b></td>
+</tr>
+<tr>
+  <td><img src="docs/preview_stats.png" width="300" alt="Stats screen — CPU, RAM, Disk, Network cards"></td>
+  <td><img src="docs/preview_clock.png" width="300" alt="Clock screen — full-screen HH:MM with date and seconds bar"></td>
+  <td><img src="docs/preview_claude_usage.png" width="300" alt="Claude usage screen — 5h and weekly API usage meters"></td>
+</tr>
+<tr>
+  <td>CPU temp &amp; speed, RAM, Disk, Network throughput — each with arc gauge</td>
+  <td>Full-screen HH:MM, blinking colon, date line, seconds progress bar</td>
+  <td>Claude API usage meters — current 5h window &amp; weekly, with live reset countdown</td>
+</tr>
+</table>
 
 ---
 
 ## What is the AX206 USB display?
 
-It is a small **480 × 320 px landscape LCD panel** with a USB 1.1 connection, built around the AX206 DPF chip. On Windows it works as an AIDA64 secondary monitor or ScreenshotTool display out of the box. On Linux there is no official driver — this project replaces that with a clean open-source Python driver.
+A small **480 × 320 px landscape LCD** with a USB 1.1 connection, built on the AX206 DPF chip. On Windows it works as an AIDA64 / ScreenshotTool secondary monitor out of the box. On Linux and macOS there is no official driver — this project replaces that with a clean Python driver.
 
-The same hardware is sold under many product names:
+Sold under many names:
 - SmartCool USB Display / SmartCool Screen
 - QDtech 3.5" USB LCD
 - AIDA64 USB Secondary Display
 - DPF AX206 USB photoframe / digital photo frame
-- Geekcreit / DIY USB monitor kit
 - Generic "USB mini monitor" from AliExpress / Temu
 
-**USB device ID:** `1908:0102` (vendor `1908`, product `0102`)
+**USB device ID:** `1908:0102`
 
 ---
 
@@ -31,109 +49,61 @@ The same hardware is sold under many product names:
 
 | | |
 |---|---|
-| 🖥️ **Stats screen** | 2 × 2 card grid: CPU temp & speed, RAM usage, disk usage, network throughput |
-| 🕐 **Clock screen** | Full-screen HH:MM — bold hours, light minutes, blinking colon, date line, seconds progress bar |
-| 🌡️ **Thermal alerts** | Values flip orange at 70 % / 85 °C and red at 85 % / 80 °C |
-| 🔄 **Auto-rotate** | Alternates between stats and clock every 3 seconds (configurable) |
-| 🔁 **Auto-recovery** | Glitches self-heal via USB Mass-Storage reset; full reopen if needed |
-| 🖋️ **Ubuntu font** | Uses Ubuntu font if installed, falls back to bundled Inter |
-| 🐧 **Systemd service** | One-line install script sets up udev rules + background service |
-| 🍎 **macOS compatible** | Works on macOS with `brew install libusb` |
+| 🖥️ **Stats screen** | CPU temp & speed, RAM, disk, network — each card with an arc gauge |
+| 🕐 **Clock screen** | Full-screen HH:MM with blinking colon, date line, seconds bar |
+| 🤖 **Claude usage screen** | Live Anthropic API usage — 5h current & 7d weekly with reset countdown |
+| 🌡️ **Thermal alerts** | Values flip orange at 70% / red at 85% |
+| 🔄 **Auto-rotate** | Cycles through all screens every 10 s (configurable) |
+| 🔁 **Auto-recovery** | USB glitches self-heal; full reopen if needed |
+| 🖋️ **Font fallback** | Ubuntu font → bundled Inter → system default |
+| 🐧 **Linux service** | Systemd + udev install script for Raspberry Pi / Debian / Ubuntu |
+| 🍎 **macOS** | Works with `brew install libusb` |
+| 🪟 **Windows** | Run via Task Scheduler for silent background autostart |
 
 ---
 
-## Hardware compatibility
+## Platform setup
 
-| Spec | Value |
-|---|---|
-| Panel resolution | 480 × 320 px, landscape |
-| Color depth | RGB565 (65 536 colors) |
-| USB | 1.1 Bulk-Only (BOT), ~1.4 full-screen frames per second |
-| USB ID | `1908:0102` |
-| Protocol | AX206 DPF vendor SCSI commands via libusb |
-
-> **Important:** Only the BLIT command (`0xCD … 0x12`) is implemented by this firmware. GETLCD and SETPROPERTY (brightness) are in the spec but **wedge the USB endpoint** on the SmartCool/QDtech variant — requiring a physical replug. The driver deliberately avoids those calls.
-
----
-
-## Quick install (Raspberry Pi / Debian / Ubuntu)
+### Linux (Raspberry Pi / Debian / Ubuntu)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ffrafat/ax206-display-linux/main/install.sh | bash
 ```
 
-This single command:
-1. Installs system dependencies (`libusb-1.0`, `python3-venv`, `fonts-liberation`)
-2. Clones the repo to `~/ax206-usb-display`
-3. Creates a Python virtual environment and installs `pyusb`, `Pillow`, `numpy`, `psutil`
-4. Writes a udev rule so the display is accessible without `sudo`
-5. Installs and starts a systemd service that auto-starts on every boot
+This installs system deps, clones the repo, creates a venv, writes a udev rule, and starts a systemd service.
 
-> Unplug and replug the display's USB cable once after the script finishes.
-
-### Optional: Ubuntu font (recommended)
-
+**Optional — Ubuntu font (recommended):**
 ```bash
 sudo apt install fonts-ubuntu
 ```
 
-The dashboard auto-detects and prefers Ubuntu font when available.
-
----
-
-## Manual setup
-
-### 1 — System dependencies
+<details>
+<summary>Manual setup</summary>
 
 ```bash
 sudo apt update
 sudo apt install -y git python3-venv python3-dev libusb-1.0-0-dev \
                    build-essential fonts-liberation fonts-ubuntu
-```
 
-### 2 — Clone and create virtualenv
-
-```bash
 git clone https://github.com/ffrafat/ax206-display-linux.git ~/ax206-usb-display
 cd ~/ax206-usb-display
 python3 -m venv .venv
 .venv/bin/pip install pyusb pillow numpy psutil
-```
 
-### 3 — USB permissions (udev rule)
-
-```bash
+# USB permissions
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1908", ATTR{idProduct}=="0102", MODE="0666"' \
   | sudo tee /etc/udev/rules.d/99-ax206.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-Replug the display's USB cable after this step.
+Replug the USB cable, then run `.venv/bin/python sysdash.py`.
 
-### 4 — Verify the display is detected
+</details>
 
-```bash
-.venv/bin/python show_image.py --test
-```
-
-A colour test pattern should appear on the screen.
-
----
-
-## Running the dashboard
-
-### Foreground (manual)
+<details>
+<summary>Systemd service</summary>
 
 ```bash
-.venv/bin/python sysdash.py
-```
-
-Press `Ctrl-C` to stop.
-
-### Background service (systemd)
-
-```bash
-# Create service file
 cat << EOF | sudo tee /etc/systemd/system/ax206.service
 [Unit]
 Description=AX206 USB Display System Monitor
@@ -155,43 +125,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ax206.service
 ```
 
-**Service management:**
-
 ```bash
-sudo systemctl status ax206       # check running state
-sudo journalctl -u ax206 -f       # live log output
+sudo systemctl status ax206       # check state
+sudo journalctl -u ax206 -f       # live logs
 sudo systemctl restart ax206      # restart after code change
-sudo systemctl stop ax206         # stop
 ```
+
+</details>
 
 ---
 
-## Command-line options
-
-```
-sysdash.py [--clock-secs N] [--stats-secs N] [--interval N] [--frames N]
-
-  --clock-secs N   Seconds to show the clock screen (default: 3)
-  --stats-secs N   Seconds to show the stats screen (default: 3)
-  --interval N     Frame update interval in seconds (default: 1.0)
-  --frames N       Exit after N frames, 0 = run forever (default: 0)
-```
-
----
-
-## Update and uninstall
-
-```bash
-# Update to latest code
-cd ~/ax206-usb-display && ./update.sh
-
-# Full uninstall (removes service, udev rule, and repo directory)
-cd ~/ax206-usb-display && ./uninstall.sh
-```
-
----
-
-## macOS setup
+### macOS
 
 ```bash
 brew install libusb
@@ -204,35 +148,95 @@ python3 -m venv .venv
 
 ---
 
+### Windows
+
+```powershell
+git clone https://github.com/ffrafat/ax206-display-linux.git C:\ax206-display
+cd C:\ax206-display
+python -m venv .venv
+.venv\Scripts\pip install pyusb pillow numpy psutil
+python sysdash.py
+```
+
+**Silent background autostart via Task Scheduler:**
+
+1. `Win+R` → `taskschd.msc`
+2. **Create Basic Task** — trigger: *When the computer starts*
+3. Action: *Start a program*
+   - Program: `C:\Users\<you>\AppData\Local\Programs\Python\Python312\pythonw.exe`
+   - Arguments: `C:\ax206-display\sysdash.py`
+   - Start in: `C:\ax206-display`
+
+Or use the included `run_sysdash.bat` as a shortcut in the Startup folder.
+
+---
+
+## Claude usage screen
+
+The Claude usage screen reads the OAuth token that **Claude Code** already stores on your machine — no separate API key needed. Just make sure you've run `claude login` at least once.
+
+- **Token location:** `~/.claude/.credentials.json` (all platforms)
+- **What it shows:** your current 5-hour usage window + 7-day weekly window, with live countdown to each reset
+- **Polling:** once every 60 seconds in a background thread; the display updates each rotation
+
+If the token is missing or expired, the status line shows `run: claude login`.
+
+---
+
+## Building your own screen
+
+The dashboard is just Python + [Pillow](https://pillow.readthedocs.io/). To add a screen:
+
+1. Write a `render_myscreen() -> Image.Image` function that returns a `480×320` PIL image
+2. Add it to `SCREEN_ORDER` and `SCREEN_SECS` in `main()`
+
+The existing screens (`render_stats`, `render_clock`, `render_claude_usage`) are good references. Everything is drawn with standard Pillow primitives — `rounded_rectangle`, `text`, `arc`, `pieslice`. The 2× supersampling (draw at 960×640, downsample to 480×320) is handled automatically.
+
+---
+
+## Command-line options
+
+```
+sysdash.py [--clock-secs N] [--stats-secs N] [--interval N] [--frames N]
+
+  --clock-secs N   Seconds to show the clock screen  (default: 10)
+  --stats-secs N   Seconds to show the stats screen  (default: 10)
+  --interval N     Frame update interval in seconds   (default: 1.0)
+  --frames N       Exit after N frames, 0 = forever  (default: 0)
+```
+
+---
+
 ## File overview
 
 | File | Purpose |
 |---|---|
-| `ax206.py` | USB driver — `AX206Display` class, CBW/CSW transport, RGB565 conversion |
-| `sysdash.py` | Dashboard renderer — stats cards, clock, arc gauges, font handling |
-| `show_image.py` | CLI utility to push a single image, solid colour, or test pattern |
+| `ax206.py` | USB driver — `AX206Display`, CBW/CSW transport, RGB565 conversion |
+| `sysdash.py` | Dashboard — stats, clock, Claude usage screens + all rendering |
+| `show_image.py` | Push a single image, solid colour, or test pattern to the display |
+| `run_sysdash.bat` | Windows launcher (use with Task Scheduler for autostart) |
+| `octopus-icon.png` | Pixel-art octopus used in the Claude usage screen header |
 | `assets/fonts/` | Bundled Inter font family (Light / Regular / SemiBold) |
-| `install.sh` | Automated setup: deps, venv, udev rule, systemd service |
+| `install.sh` | Automated Linux setup: deps, venv, udev rule, systemd service |
 | `update.sh` | Pull latest code and restart service |
 | `uninstall.sh` | Remove service, udev rule, and directory |
 
 ---
 
-## Protocol notes (for developers)
+## Protocol notes
 
-- **Transport:** USB Mass Storage Bulk-Only Transport (BOT). Endpoints: `EP 0x01 BULK OUT`, `EP 0x81 BULK IN`.
-- **Command format:** 31-byte CBW (`USBC` signature) + pixel data + 13-byte CSW (`USBS` signature).
-- **Only one vendor command works:** BLIT (`CDB[0]=0xCD, CDB[6]=0x12`). Sending GETLCD or SETPROPERTY hangs the OUT endpoint on this firmware — confirmed on hardware.
+- **Transport:** USB Mass Storage Bulk-Only (BOT). Endpoints `EP 0x01 BULK OUT` / `EP 0x81 BULK IN`.
+- **Only BLIT works:** `CDB[0]=0xCD, CDB[6]=0x12`. GETLCD and SETPROPERTY wedge the OUT endpoint on this firmware.
 - **Pixels:** RGB565 big-endian. `byte0 = (R & 0xF8) | (G >> 5)`, `byte1 = ((G & 0x1C) << 3) | (B >> 3)`.
-- **Rendering:** Frames are drawn at 960 × 640 (2× supersampling) then downscaled to 480 × 320 with LANCZOS for crisp sub-pixel text.
-- **Recovery:** USB glitches → `recover()` (Mass-Storage reset + `clear_halt`). Persistent errors → `reopen()` (close + reopen device handle). Six consecutive failures → exit with code 1.
+- **Rendering:** 2× supersampling (960×640 → 480×320 LANCZOS) for crisp sub-pixel text.
+- **Recovery:** USB glitch → `recover()` (reset + clear_halt). Six consecutive failures → exit 1.
 
 ---
 
-## Credits & attribution
+## Credits
 
-- [sunzhengya/ax206-usb-display-macos](https://github.com/sunzhengya/ax206-usb-display-macos) — original clean macOS driver and dashboard this project is forked from
-- [dreamlayers/dpf-ax](https://github.com/dreamlayers/dpf-ax) — authoritative reverse-engineered AX206 command set documentation
+- [sunzhengya/ax206-usb-display-macos](https://github.com/sunzhengya/ax206-usb-display-macos) — original macOS driver this project is forked from
+- [dreamlayers/dpf-ax](https://github.com/dreamlayers/dpf-ax) — reverse-engineered AX206 command set
 - [mathoudebine/turing-smart-screen-python](https://github.com/mathoudebine/turing-smart-screen-python) — reference for USB info-display projects in Python
 
 ---

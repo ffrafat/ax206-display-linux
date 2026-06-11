@@ -313,7 +313,7 @@ _OCTOPUS_DISPLAY_SIZE = 36  # display px
 
 def _load_octopus_icon() -> None:
     global _OCTOPUS_ICON
-    path = os.path.join(SCRIPT_DIR, "octopus-icon.png")
+    path = os.path.join(SCRIPT_DIR, "claude-logo.png")
     try:
         img = Image.open(path).convert("RGBA")
         data = list(img.getdata())
