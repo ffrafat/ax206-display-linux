@@ -25,8 +25,8 @@ M  = 16
 G  = 12
 HDR = 36
 
-ROTATE_CLOCK = 3.0
-ROTATE_STATS = 3.0
+ROTATE_CLOCK = 10.0
+ROTATE_STATS = 10.0
 
 # ---- Palette ----
 BG     = (10, 12, 16)
