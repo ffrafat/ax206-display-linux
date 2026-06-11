@@ -48,7 +48,15 @@ NET_DN = (74, 222, 128)
 NET_UP = (250, 204, 21)
 HOT    = (248, 113, 113)
 WARN   = (251, 146, 60)
-PILL_BG = (80, 30, 140)
+
+# Claude / Anthropic brand palette (usage screen only)
+CL_PANEL  = (31,  31,  30)    # #1f1f1e
+CL_TEXT   = (250, 249, 245)   # #faf9f5  warm white
+CL_DIM    = (176, 174, 165)   # #b0aea5
+CL_ACCENT = (217, 119, 87)    # #d97757  terra-cotta
+CL_GREEN  = (120, 140, 93)    # #788c5d
+CL_RED    = (192, 57,  43)    # #c0392b
+CL_TRACK  = (42,  42,  40)    # #2a2a28
 
 # ---- Fonts ----
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -347,11 +355,17 @@ _usage_data: dict = {
 }
 
 
-def _parse_reset_ts(ts_str: str) -> float:
-    if not ts_str:
+def _parse_reset_ts(val: str) -> float:
+    if not val:
         return 0.0
     try:
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        ts = float(val)
+        if ts > 1_000_000_000:   # unix epoch integer
+            return ts
+    except (ValueError, TypeError):
+        pass
+    try:
+        dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
         return dt.timestamp()
     except Exception:
         return 0.0
@@ -404,9 +418,9 @@ def fetch_claude_usage() -> dict:
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            hdrs = dict(resp.headers)
+            hdrs = resp.headers          # HTTPMessage — case-insensitive .get()
     except urllib.error.HTTPError as e:
-        hdrs = dict(e.headers)
+        hdrs = e.headers
 
     session_util = float(hdrs.get("anthropic-ratelimit-unified-5h-utilization") or "0")
     weekly_util  = float(hdrs.get("anthropic-ratelimit-unified-7d-utilization") or "0")
@@ -584,6 +598,49 @@ def _clock_fonts(max_w: float) -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTy
 
 # ---- Renderers ----
 
+_CLAUDE_VERBS = [
+    "Accomplishing", "Elucidating", "Perusing",
+    "Actioning", "Enchanting", "Philosophising",
+    "Actualizing", "Envisioning", "Pondering",
+    "Baking", "Finagling", "Pontificating",
+    "Booping", "Flibbertigibbeting", "Processing",
+    "Brewing", "Forging", "Puttering",
+    "Calculating", "Forming", "Puzzling",
+    "Cerebrating", "Frolicking", "Reticulating",
+    "Channelling", "Generating", "Ruminating",
+    "Churning", "Germinating", "Scheming",
+    "Clauding", "Hatching", "Schlepping",
+    "Coalescing", "Herding", "Shimmying",
+    "Cogitating", "Honking", "Shucking",
+    "Combobulating", "Hustling", "Simmering",
+    "Computing", "Ideating", "Smooshing",
+    "Concocting", "Imagining", "Spelunking",
+    "Conjuring", "Incubating", "Spinning",
+    "Considering", "Inferring", "Stewing",
+    "Contemplating", "Jiving", "Sussing",
+    "Cooking", "Manifesting", "Synthesizing",
+    "Crafting", "Marinating", "Thinking",
+    "Creating", "Meandering", "Tinkering",
+    "Crunching", "Moseying", "Transmuting",
+    "Deciphering", "Mulling", "Unfurling",
+    "Deliberating", "Mustering", "Unravelling",
+    "Determining", "Musing", "Vibing",
+    "Discombobulating", "Noodling", "Wandering",
+    "Divining", "Percolating", "Whirring",
+    "Doing", "Wibbling",
+    "Effecting", "Wizarding",
+    "Working", "Wrangling",
+]
+_SPINNERS     = ["·", "✻", "✽", "✶", "✳", "✢"]
+_SPIN_PHASES  = 2 * (len(_SPINNERS) - 1)   # ping-pong: 0→5→0
+
+
+def _spin_char(now: float) -> str:
+    phase = int(now * 4) % _SPIN_PHASES
+    idx   = phase if phase < len(_SPINNERS) else _SPIN_PHASES - phase
+    return _SPINNERS[idx]
+
+
 def render_claude_usage(usage: dict) -> Image.Image:
     img = Image.new("RGB", (W * SS, H * SS), BG)
     d   = ImageDraw.Draw(img)
@@ -597,12 +654,18 @@ def render_claude_usage(usage: dict) -> Image.Image:
         iy = (HDR_H // 2 - _OCTOPUS_DISPLAY_SIZE // 2) * SS
         img.paste(_OCTOPUS_ICON, (M * SS, iy), _OCTOPUS_ICON)
 
-    text_centered(d, W * SS / 2, hdr_cy, "Usage", F_USAGE_HDR, INK)
-    d.line([(M * SS, HDR_H * SS), ((W - M) * SS, HDR_H * SS)], fill=TRACK, width=2 * SS)
+    text_centered(d, W * SS / 2, hdr_cy, "Usage", F_USAGE_HDR, CL_TEXT)
+    d.line([(M * SS, HDR_H * SS), ((W - M) * SS, HDR_H * SS)],
+           fill=CL_TRACK, width=2 * SS)
 
     # ---- Panel helper ----
     PANEL_H = 103
     PAD_X   = 14
+
+    def _bar_color(pct: float) -> tuple[int, int, int]:
+        if pct >= 80: return CL_RED
+        if pct >= 50: return CL_ACCENT
+        return CL_GREEN
 
     def draw_panel(y0_px: int, pct: float, label: str, reset_str: str) -> None:
         x0 = M * SS
@@ -610,21 +673,20 @@ def render_claude_usage(usage: dict) -> Image.Image:
         x1 = (W - M) * SS
         y1 = (y0_px + PANEL_H) * SS
         px = PAD_X * SS
+        bc = _bar_color(pct)
 
-        d.rounded_rectangle([x0, y0, x1, y1], radius=10 * SS, fill=PANEL)
+        d.rounded_rectangle([x0, y0, x1, y1], radius=10 * SS, fill=CL_PANEL)
 
-        # Percentage + pill — vertically centred in top 52px zone
-        zone_cy = y0 + 31 * SS
-
-        pct_text  = f"{round(pct)}%"
-        bar_color = _claude_bar_color(pct)
+        # Percentage — left, top-zone centre
+        zone_cy  = y0 + 31 * SS
+        pct_text = f"{round(pct)}%"
         bb = F_USAGE_PCT.getbbox(pct_text)
         d.text((x0 + px - bb[0], zone_cy - (bb[3] - bb[1]) // 2 - bb[1]),
-               pct_text, font=F_USAGE_PCT, fill=bar_color)
+               pct_text, font=F_USAGE_PCT, fill=CL_TEXT)
 
-        # Pill
+        # Pill — right, same vertical centre
         ppx, ppy = 10 * SS, 5 * SS
-        lb = F_USAGE_PILL.getbbox(label)
+        lb      = F_USAGE_PILL.getbbox(label)
         pill_w  = (lb[2] - lb[0]) + 2 * ppx
         pill_h  = (lb[3] - lb[1]) + 2 * ppy
         pill_x1 = x1 - px
@@ -632,9 +694,9 @@ def render_claude_usage(usage: dict) -> Image.Image:
         pill_y0 = zone_cy - pill_h // 2
         pill_y1 = zone_cy + pill_h // 2
         d.rounded_rectangle([pill_x0, pill_y0, pill_x1, pill_y1],
-                            radius=pill_h // 2, fill=PILL_BG)
+                            radius=pill_h // 2, fill=CL_TRACK)
         d.text((pill_x0 + ppx - lb[0], pill_y0 + ppy - lb[1]),
-               label, font=F_USAGE_PILL, fill=INK)
+               label, font=F_USAGE_PILL, fill=CL_TEXT)
 
         # Progress bar
         bar_h  = 10 * SS
@@ -643,47 +705,44 @@ def render_claude_usage(usage: dict) -> Image.Image:
         bar_x0 = x0 + px
         bar_x1 = x1 - px
         bar_r  = bar_h // 2
-        d.rounded_rectangle([bar_x0, bar_y0, bar_x1, bar_y1], radius=bar_r, fill=TRACK)
+        d.rounded_rectangle([bar_x0, bar_y0, bar_x1, bar_y1], radius=bar_r, fill=CL_TRACK)
         fill_w = int((bar_x1 - bar_x0) * min(1.0, pct / 100))
         if fill_w > bar_r * 2:
             d.rounded_rectangle([bar_x0, bar_y0, bar_x0 + fill_w, bar_y1],
-                               radius=bar_r, fill=bar_color)
+                               radius=bar_r, fill=bc)
 
         # Reset text
         rb = F_USAGE_RST.getbbox(reset_str)
         d.text((x0 + px - rb[0], bar_y1 + 8 * SS - rb[1]),
-               reset_str, font=F_USAGE_RST, fill=MUTED)
+               reset_str, font=F_USAGE_RST, fill=CL_DIM)
 
-    p1_y = HDR_H + 4          # 54
-    p2_y = p1_y + PANEL_H + 8  # 165
+    p1_y = HDR_H + 4
+    p2_y = p1_y + PANEL_H + 8
 
     draw_panel(p1_y,
                usage.get("session_pct", 0),
-               "Current",
+               "Current · 5h",
                fmt_reset(usage.get("session_reset_ts", 0)))
     draw_panel(p2_y,
                usage.get("weekly_pct", 0),
-               "Weekly",
+               "Weekly · 7d",
                fmt_reset(usage.get("weekly_reset_ts", 0)))
 
     # ---- Status line ----
-    spinners = ["*", "✦", "✧", "⊹", "✴", "·"]
-    verbs    = ["Divining", "Thinking", "Calculating", "Querying",
-                "Polling", "Summoning", "Conjuring", "Meditating"]
     status_cy = (p2_y + PANEL_H + (H - p2_y - PANEL_H) // 2) * SS
-    sp = spinners[int(now * 2) % len(spinners)]
+    sp        = _spin_char(now)
 
     if usage.get("error"):
-        status_txt   = f"  Error — {str(usage['error'])[:28]}"
+        status_txt   = f"{sp}  {str(usage['error'])[:32]}"
         status_color = HOT
     elif not usage.get("ok"):
-        vb = verbs[int(now / 4) % len(verbs)]
+        vb           = _CLAUDE_VERBS[int(now / 4) % len(_CLAUDE_VERBS)]
         status_txt   = f"{sp}  {vb}..."
-        status_color = WARN
+        status_color = CL_ACCENT
     else:
-        ago = int(now - usage.get("last_update", 0))
-        status_txt   = f"{sp}  Updated {ago}s ago" if ago < 120 else f"{sp}  Updated {ago // 60}m ago"
-        status_color = MUTED
+        vb           = _CLAUDE_VERBS[int(now / 4) % len(_CLAUDE_VERBS)]
+        status_txt   = f"{sp}  {vb}..."
+        status_color = CL_ACCENT
 
     text_centered(d, W * SS / 2, status_cy, status_txt, F_USAGE_STAT, status_color)
 
