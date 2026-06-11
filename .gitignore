@@ -10,3 +10,6 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
+
+# Local secrets
+.env

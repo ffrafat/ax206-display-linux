@@ -8,9 +8,14 @@ Alternates two screens every 3 seconds:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
+import threading
 import time
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
 from typing import Optional
 
 import psutil
@@ -27,6 +32,8 @@ HDR = 36
 
 ROTATE_CLOCK = 10.0
 ROTATE_STATS = 10.0
+ROTATE_USAGE = 10.0
+CLAUDE_POLL_INTERVAL = 60
 
 # ---- Palette ----
 BG     = (10, 12, 16)
@@ -41,6 +48,7 @@ NET_DN = (74, 222, 128)
 NET_UP = (250, 204, 21)
 HOT    = (248, 113, 113)
 WARN   = (251, 146, 60)
+PILL_BG = (80, 30, 140)
 
 # ---- Fonts ----
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -74,6 +82,12 @@ def _font(size: int, bold: bool = False, light: bool = False) -> ImageFont.FreeT
             continue
     return ImageFont.load_default()
 
+
+F_USAGE_HDR  = _font(20 * SS, bold=True)
+F_USAGE_PCT  = _font(32 * SS, bold=True)
+F_USAGE_PILL = _font(11 * SS, bold=True)
+F_USAGE_RST  = _font(10 * SS)
+F_USAGE_STAT = _font(10 * SS)
 
 F_HEADER  = _font(11 * SS, bold=True)
 F_IP      = _font(11 * SS)
@@ -284,6 +298,170 @@ _ICONS = {
 
 ICON_SZ = 16 * SS   # 16 display px, drawn at 32 render px
 
+# ---- Octopus icon (for Claude usage screen) ----
+_OCTOPUS_ICON: Optional[Image.Image] = None
+_OCTOPUS_DISPLAY_SIZE = 36  # display px
+
+
+def _load_octopus_icon() -> None:
+    global _OCTOPUS_ICON
+    path = os.path.join(SCRIPT_DIR, "octopus-icon.png")
+    try:
+        img = Image.open(path).convert("RGBA")
+        data = list(img.getdata())
+        for i, (r, g, b, a) in enumerate(data):
+            if r > 230 and g > 230 and b > 230:
+                data[i] = (r, g, b, 0)
+        img.putdata(data)
+        sz = _OCTOPUS_DISPLAY_SIZE * SS
+        _OCTOPUS_ICON = img.resize((sz, sz), Image.Resampling.LANCZOS)
+    except Exception:
+        _OCTOPUS_ICON = None
+
+
+# ---- .env loader ----
+
+def _load_env(path: str) -> dict:
+    result: dict = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                result[key.strip()] = val.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+    return result
+
+
+# ---- Claude API usage fetch ----
+
+_usage_lock = threading.Lock()
+_usage_data: dict = {
+    "ok": False, "error": None,
+    "session_pct": 0.0, "weekly_pct": 0.0,
+    "session_reset_ts": 0.0, "weekly_reset_ts": 0.0,
+    "last_update": 0.0,
+}
+
+
+def _parse_reset_ts(ts_str: str) -> float:
+    if not ts_str:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _read_claude_token() -> Optional[str]:
+    """Read the OAuth access token Claude Code stores locally."""
+    home = os.path.expanduser("~")
+    local_appdata = os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local"))
+    candidates = [
+        os.path.join(home, ".claude", ".credentials.json"),
+        os.path.join(local_appdata, "Claude", ".credentials.json"),
+    ]
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read()
+            data = json.loads(raw)
+            # {"claudeAiOauth": {"accessToken": "..."}}  or  {"accessToken": "..."}
+            tok = data.get("accessToken")
+            if not tok:
+                oauth = data.get("claudeAiOauth", {})
+                tok = oauth.get("accessToken")
+            if isinstance(tok, str) and tok.strip():
+                return tok.strip()
+        except Exception:
+            continue
+    return None
+
+
+def fetch_claude_usage() -> dict:
+    token = _read_claude_token()
+    if not token:
+        raise RuntimeError("No Claude token — run: claude login")
+
+    payload = json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "Authorization":    f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta":   "oauth-2025-04-20",
+            "content-type":     "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            hdrs = dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        hdrs = dict(e.headers)
+
+    session_util = float(hdrs.get("anthropic-ratelimit-unified-5h-utilization") or "0")
+    weekly_util  = float(hdrs.get("anthropic-ratelimit-unified-7d-utilization") or "0")
+    session_rst  = hdrs.get("anthropic-ratelimit-unified-5h-reset") or ""
+    weekly_rst   = hdrs.get("anthropic-ratelimit-unified-7d-reset") or ""
+
+    return {
+        "ok":               True,
+        "error":            None,
+        "session_pct":      session_util * 100,
+        "weekly_pct":       weekly_util * 100,
+        "session_reset_ts": _parse_reset_ts(session_rst),
+        "weekly_reset_ts":  _parse_reset_ts(weekly_rst),
+        "last_update":      time.time(),
+    }
+
+
+def _usage_poller() -> None:
+    while True:
+        try:
+            data = fetch_claude_usage()
+            with _usage_lock:
+                _usage_data.update(data)
+        except Exception as e:
+            with _usage_lock:
+                _usage_data["error"] = str(e)[:40]
+                _usage_data["ok"] = False
+        time.sleep(CLAUDE_POLL_INTERVAL)
+
+
+def get_usage_snapshot() -> dict:
+    with _usage_lock:
+        return dict(_usage_data)
+
+
+def fmt_reset(reset_ts: float) -> str:
+    secs = max(0, int(reset_ts - time.time()))
+    if secs == 0:
+        return "Resets soon"
+    if secs < 3600:
+        return f"Resets in {secs // 60}m"
+    if secs < 86400:
+        h, m = secs // 3600, (secs % 3600) // 60
+        return f"Resets in {h}h {m}m"
+    d, h = secs // 86400, (secs % 86400) // 3600
+    return f"Resets in {d}d {h}h"
+
+
+def _claude_bar_color(pct: float) -> tuple[int, int, int]:
+    if pct >= 80:
+        return HOT
+    if pct >= 50:
+        return WARN
+    return DISK
+
 
 # ---- Arc Gauge ----
 # gauge_cy = y1 - 42 render px from card bottom.
@@ -405,6 +583,112 @@ def _clock_fonts(max_w: float) -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTy
 
 
 # ---- Renderers ----
+
+def render_claude_usage(usage: dict) -> Image.Image:
+    img = Image.new("RGB", (W * SS, H * SS), BG)
+    d   = ImageDraw.Draw(img)
+    now = time.time()
+
+    # ---- Header (0–50px) ----
+    HDR_H  = 50
+    hdr_cy = 25 * SS
+
+    if _OCTOPUS_ICON:
+        iy = (HDR_H // 2 - _OCTOPUS_DISPLAY_SIZE // 2) * SS
+        img.paste(_OCTOPUS_ICON, (M * SS, iy), _OCTOPUS_ICON)
+
+    text_centered(d, W * SS / 2, hdr_cy, "Usage", F_USAGE_HDR, INK)
+    d.line([(M * SS, HDR_H * SS), ((W - M) * SS, HDR_H * SS)], fill=TRACK, width=2 * SS)
+
+    # ---- Panel helper ----
+    PANEL_H = 103
+    PAD_X   = 14
+
+    def draw_panel(y0_px: int, pct: float, label: str, reset_str: str) -> None:
+        x0 = M * SS
+        y0 = y0_px * SS
+        x1 = (W - M) * SS
+        y1 = (y0_px + PANEL_H) * SS
+        px = PAD_X * SS
+
+        d.rounded_rectangle([x0, y0, x1, y1], radius=10 * SS, fill=PANEL)
+
+        # Percentage + pill — vertically centred in top 52px zone
+        zone_cy = y0 + 31 * SS
+
+        pct_text  = f"{round(pct)}%"
+        bar_color = _claude_bar_color(pct)
+        bb = F_USAGE_PCT.getbbox(pct_text)
+        d.text((x0 + px - bb[0], zone_cy - (bb[3] - bb[1]) // 2 - bb[1]),
+               pct_text, font=F_USAGE_PCT, fill=bar_color)
+
+        # Pill
+        ppx, ppy = 10 * SS, 5 * SS
+        lb = F_USAGE_PILL.getbbox(label)
+        pill_w  = (lb[2] - lb[0]) + 2 * ppx
+        pill_h  = (lb[3] - lb[1]) + 2 * ppy
+        pill_x1 = x1 - px
+        pill_x0 = pill_x1 - pill_w
+        pill_y0 = zone_cy - pill_h // 2
+        pill_y1 = zone_cy + pill_h // 2
+        d.rounded_rectangle([pill_x0, pill_y0, pill_x1, pill_y1],
+                            radius=pill_h // 2, fill=PILL_BG)
+        d.text((pill_x0 + ppx - lb[0], pill_y0 + ppy - lb[1]),
+               label, font=F_USAGE_PILL, fill=INK)
+
+        # Progress bar
+        bar_h  = 10 * SS
+        bar_y0 = y0 + 56 * SS
+        bar_y1 = bar_y0 + bar_h
+        bar_x0 = x0 + px
+        bar_x1 = x1 - px
+        bar_r  = bar_h // 2
+        d.rounded_rectangle([bar_x0, bar_y0, bar_x1, bar_y1], radius=bar_r, fill=TRACK)
+        fill_w = int((bar_x1 - bar_x0) * min(1.0, pct / 100))
+        if fill_w > bar_r * 2:
+            d.rounded_rectangle([bar_x0, bar_y0, bar_x0 + fill_w, bar_y1],
+                               radius=bar_r, fill=bar_color)
+
+        # Reset text
+        rb = F_USAGE_RST.getbbox(reset_str)
+        d.text((x0 + px - rb[0], bar_y1 + 8 * SS - rb[1]),
+               reset_str, font=F_USAGE_RST, fill=MUTED)
+
+    p1_y = HDR_H + 4          # 54
+    p2_y = p1_y + PANEL_H + 8  # 165
+
+    draw_panel(p1_y,
+               usage.get("session_pct", 0),
+               "Current",
+               fmt_reset(usage.get("session_reset_ts", 0)))
+    draw_panel(p2_y,
+               usage.get("weekly_pct", 0),
+               "Weekly",
+               fmt_reset(usage.get("weekly_reset_ts", 0)))
+
+    # ---- Status line ----
+    spinners = ["*", "✦", "✧", "⊹", "✴", "·"]
+    verbs    = ["Divining", "Thinking", "Calculating", "Querying",
+                "Polling", "Summoning", "Conjuring", "Meditating"]
+    status_cy = (p2_y + PANEL_H + (H - p2_y - PANEL_H) // 2) * SS
+    sp = spinners[int(now * 2) % len(spinners)]
+
+    if usage.get("error"):
+        status_txt   = f"  Error — {str(usage['error'])[:28]}"
+        status_color = HOT
+    elif not usage.get("ok"):
+        vb = verbs[int(now / 4) % len(verbs)]
+        status_txt   = f"{sp}  {vb}..."
+        status_color = WARN
+    else:
+        ago = int(now - usage.get("last_update", 0))
+        status_txt   = f"{sp}  Updated {ago}s ago" if ago < 120 else f"{sp}  Updated {ago // 60}m ago"
+        status_color = MUTED
+
+    text_centered(d, W * SS / 2, status_cy, status_txt, F_USAGE_STAT, status_color)
+
+    return img.resize((W, H), Image.Resampling.LANCZOS)
+
 
 def render_stats(state: dict) -> Image.Image:
     img = Image.new("RGB", (W * SS, H * SS), BG)
@@ -548,6 +832,15 @@ def main() -> int:
     ap.add_argument("--frames",     type=int,   default=0)
     args = ap.parse_args()
 
+    # Start Claude usage poller (reads token from ~/.claude/.credentials.json)
+    _load_octopus_icon()
+    poller = threading.Thread(target=_usage_poller, daemon=True)
+    poller.start()
+    print("Claude usage poller started")
+
+    SCREEN_ORDER = ["clock", "stats", "usage"]
+    SCREEN_SECS  = {"clock": args.clock_secs, "stats": args.stats_secs, "usage": ROTATE_USAGE}
+
     psutil.cpu_percent()
     prev_net = psutil.net_io_counters()
     last     = time.time()
@@ -556,25 +849,28 @@ def main() -> int:
 
     with AX206Display() as s:
         print(f"sysdash running ({s.width}x{s.height}), "
-              f"clock {args.clock_secs}s / stats {args.stats_secs}s, Ctrl-C to stop")
+              f"clock {args.clock_secs}s / stats {args.stats_secs}s / usage {ROTATE_USAGE}s, "
+              f"Ctrl-C to stop")
         count = glitches = consec = 0
 
         while True:
             now     = time.time()
             elapsed = now - screen_started
-            if screen == "clock" and elapsed >= args.clock_secs:
-                screen = "stats";  screen_started = now
-            elif screen == "stats" and elapsed >= args.stats_secs:
-                screen = "clock";  screen_started = now
+            if elapsed >= SCREEN_SECS[screen]:
+                idx    = SCREEN_ORDER.index(screen)
+                screen = SCREEN_ORDER[(idx + 1) % len(SCREEN_ORDER)]
+                screen_started = now
 
             dt   = now - last
             last = now
 
             if screen == "clock":
                 frame = render_clock(int(now) % 2 == 0)
-            else:
+            elif screen == "stats":
                 state, prev_net = collect_state(prev_net, dt)
                 frame = render_stats(state)
+            else:
+                frame = render_claude_usage(get_usage_snapshot())
 
             t0 = time.time()
             try:
@@ -597,14 +893,14 @@ def main() -> int:
             consec = 0;  count += 1
             if count == 1 or count % 10 == 0:
                 ms = (time.time() - t0) * 1000
-                print(f"frame {count} [{'clock' if screen=='clock' else 'stats'}]: "
-                      f"push {ms:.0f}ms (glitches {glitches})", flush=True)
+                print(f"frame {count} [{screen}]: push {ms:.0f}ms (glitches {glitches})", flush=True)
 
             if args.frames and count >= args.frames:
                 break
 
             time.sleep(max(0.05, 1.0 - (time.time() % 1.0)) if screen == "clock"
-                       else args.interval)
+                       else args.interval if screen == "stats"
+                       else 0.5)
 
     return 0
 
